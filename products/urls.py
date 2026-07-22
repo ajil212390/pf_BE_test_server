@@ -2,7 +2,7 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     ProductViewSet, ProductCategoryViewSet, ProductUnitViewSet,
-    register_user, login_user,
+    register_user, login_user, update_company, change_password,
     admin_overview, admin_companies, admin_users, admin_products,
     admin_user_products, admin_company_products,
 )
@@ -16,6 +16,8 @@ urlpatterns = [
     path('', include(router.urls)),
     path('register/', register_user),
     path('login/', login_user),
+    path('update-company/', update_company),
+    path('change-password/', change_password),
     path('admin/overview/', admin_overview),
     path('admin/companies/', admin_companies),
     path('admin/users/', admin_users),

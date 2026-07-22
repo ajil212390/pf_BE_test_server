@@ -8,6 +8,7 @@ from rest_framework.decorators import action, api_view
 import openpyxl
 import csv
 import io
+from datetime import datetime, date
 
 @api_view(['POST'])
 def register_user(request):
@@ -65,6 +66,47 @@ def login_user(request):
             return Response({'error': 'Incorrect password.'}, status=status.HTTP_401_UNAUTHORIZED)
     except Users.DoesNotExist:
         return Response({'error': 'Username not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['POST'])
+def update_company(request):
+    data = request.data
+    user_id = data.get('userid')
+    try:
+        user = Users.objects.get(userid=user_id)
+        company = user.companyid
+        if company:
+            if 'companyname' in data:
+                company.companyname = data['companyname']
+            if 'companyphonenumber' in data:
+                company.companyphonenumber = data['companyphonenumber']
+            company.save()
+            return Response({'message': 'Company updated successfully'})
+        else:
+            return Response({'error': 'No company found for this user'}, status=status.HTTP_404_NOT_FOUND)
+    except Users.DoesNotExist:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+def change_password(request):
+    data = request.data
+    user_id = data.get('userid')
+    current_password = data.get('current_password')
+    new_password = data.get('new_password')
+    
+    try:
+        user = Users.objects.get(userid=user_id)
+        if user.userpassword != current_password:
+            return Response({'error': 'Incorrect current password.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        user.userpassword = new_password
+        user.save()
+        return Response({'message': 'Password changed successfully.'}, status=status.HTTP_200_OK)
+    except Users.DoesNotExist:
+        return Response({'error': 'User not found.'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ─── ADMIN ENDPOINTS ────────────────────────────────────────────────────────
@@ -313,6 +355,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 price = row_data.get('price') or row_data.get('productprice') or row_data.get('cost') or row_data.get('rate') or row_data.get('mrp')
                 category_name = row_data.get('category') or row_data.get('productcategory') or row_data.get('group') or row_data.get('department')
                 unit_name = row_data.get('unit') or row_data.get('productunit') or row_data.get('uom') or row_data.get('measure')
+                date_val = row_data.get('date') or row_data.get('dateadded') or row_data.get('created') or row_data.get('added')
                 
                 if not name and len(row) > 0:
                     name = row[0]
@@ -337,6 +380,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                     'price': price_val,
                     'category': str(category_name).strip() if category_name and str(category_name).strip() != 'None' else '',
                     'unit': str(unit_name).strip() if unit_name and str(unit_name).strip() != 'None' else '',
+                    'date': str(date_val).strip() if date_val and str(date_val).strip() != 'None' else '',
                 })
                 
             return Response({'preview': preview_data}, status=status.HTTP_200_OK)
@@ -367,6 +411,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 price = item.get('price', 0.0)
                 category_name = item.get('category')
                 unit_name = item.get('unit')
+                item_date = item.get('date')
 
                 if not name:
                     continue
@@ -381,6 +426,14 @@ class ProductViewSet(viewsets.ModelViewSet):
                     unit, _ = Productunit.objects.get_or_create(productunitname=str(unit_name).strip())
                     unit_id = unit.productunitid
 
+                # Parse date if available, otherwise use today's date
+                parsed_date = date.today()
+                if item_date:
+                    try:
+                        parsed_date = datetime.strptime(str(item_date), '%Y-%m-%d').date()
+                    except ValueError:
+                        pass
+
                 Products.objects.update_or_create(
                     productname=str(name).strip(),
                     defaults={
@@ -390,6 +443,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                         'addtype': 'Bulk',
                         'userid': user_obj,
                         'companyid': company_obj,
+                        'dateadded': parsed_date,
                     }
                 )
                 imported_count += 1

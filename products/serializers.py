@@ -14,6 +14,7 @@ class ProductUnitSerializer(serializers.ModelSerializer):
 class ProductSerializer(serializers.ModelSerializer):
     categoryname = serializers.CharField(source='productcategoryid.productcategoryname', read_only=True)
     unitname = serializers.CharField(source='productunitid.productunitname', read_only=True)
+    companyname = serializers.CharField(source='companyid.companyname', read_only=True)
     productphotourl = serializers.SerializerMethodField()
     productphotopath = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
