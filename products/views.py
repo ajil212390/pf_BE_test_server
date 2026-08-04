@@ -1,6 +1,7 @@
+from decimal import Decimal
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-from .models import Products, Productcategory, Productunit, Company, Users
+from .models import Products, Productcategory, Productunit, Company, Users, Customer, Supplier, CustomerBill, SupplierBill, EndUser, Supplieruser
 from .serializers import ProductSerializer, ProductCategorySerializer, ProductUnitSerializer
 from django.core.files.storage import default_storage
 import uuid
@@ -9,6 +10,77 @@ import openpyxl
 import csv
 import io
 from datetime import datetime, date
+from django.db.models import Sum
+
+@api_view(['POST'])
+def register_enduser(request):
+    data = request.data
+    try:
+        if EndUser.objects.filter(endusername__iexact=data.get('endusername')).exists():
+            return Response({'error': 'Username already taken.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        enduser = EndUser.objects.create(
+            endusername=data.get('endusername'),
+            enduserpassword=data.get('enduserpassword'),  # plain text, matching your existing pattern
+            enduseremail=data.get('enduseremail'),
+            enduserphone=data.get('enduserphone'),
+        )
+        return Response({
+            'message': 'Registration successful',
+            'enduserid': enduser.endsuerid,
+            'endusername': enduser.endusername,
+        }, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+def login_supplier(request):
+    data = request.data
+    username = data.get('supplierusername') or data.get('username')
+    password = data.get('supplieruserpassword') or data.get('password')
+
+    if not username or not password:
+        return Response({'error': 'Username and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        supplier_user = Supplieruser.objects.get(supplierusername__iexact=username)
+        if supplier_user.supplieruserpassword == password:
+            return Response({
+                'message': 'Login successful',
+                'supplieruserid': supplier_user.supplieruserid,
+                'suppliername': supplier_user.suppliername or '',
+                'supplierusername': supplier_user.supplierusername,
+                'supplieruseremail': supplier_user.supplieruseremail or '',
+                'supplieruserphone': supplier_user.supplieruserphone or '',
+                'supplierusergstnumber': supplier_user.supplierusergstnumber or '',
+                'supplieruseraddress': supplier_user.supplieruseraddress or '',
+            }, status=status.HTTP_200_OK)
+        return Response({'error': 'Incorrect password.'}, status=status.HTTP_401_UNAUTHORIZED)
+    except Supplieruser.DoesNotExist:
+        return Response({'error': 'Username not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['POST'])
+def login_enduser(request):
+    data = request.data
+    username = data.get('endusername')
+    password = data.get('enduserpassword')
+
+    try:
+        enduser = EndUser.objects.get(endusername__iexact=username)
+        if enduser.enduserpassword == password:
+            return Response({
+                'message': 'Login successful',
+                'enduserid': enduser.endsuerid,
+                'endusername': enduser.endusername,
+                'enduseremail': enduser.enduseremail or '',
+                'enduserphone': enduser.enduserphone or '',
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({'error': 'Incorrect password.'}, status=status.HTTP_401_UNAUTHORIZED)
+    except EndUser.DoesNotExist:
+        return Response({'error': 'Username not found.'}, status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['POST'])
 def register_user(request):
@@ -190,6 +262,54 @@ def admin_products(request):
         })
     return Response(result)
 
+def _currency_value(value):
+    if value is None:
+        return 0.0
+    return float(Decimal(str(value)).quantize(Decimal('0.01')))
+
+
+def _build_financial_summary(total_count, bill_count, bill_amount, note_count, note_amount, paid_amount, balance_amount):
+    return {
+        'count': total_count,
+        'bills_count': bill_count,
+        'bills_amount': _currency_value(bill_amount),
+        'notes_count': note_count,
+        'notes_amount': _currency_value(note_amount),
+        'paid_amount': _currency_value(paid_amount),
+        'balance_amount': _currency_value(balance_amount),
+    }
+
+
+def _rollup_account_rows(rows):
+    bill_count = sum(int(row.get('bills_count') or 0) for row in rows)
+    bills_amount = sum(float(row.get('bills_amount') or 0.0) for row in rows)
+    note_count = sum(int(row.get('credit_notes_count') or row.get('debit_notes_count') or 0) for row in rows)
+    notes_amount = sum(float(row.get('credit_notes_amount') or row.get('debit_notes_amount') or 0.0) for row in rows)
+    paid_amount = sum(float(row.get('paid_amount') or 0.0) for row in rows)
+    balance_amount = sum(float(row.get('balance_amount') or 0.0) for row in rows)
+    return {
+        'bills_count': bill_count,
+        'bills_amount': _currency_value(bills_amount),
+        'notes_count': note_count,
+        'notes_amount': _currency_value(notes_amount),
+        'paid_amount': _currency_value(paid_amount),
+        'balance_amount': _currency_value(balance_amount),
+    }
+
+
+def _net_outstanding(balance_amount, note_amount):
+    balance_amount = balance_amount or Decimal('0.00')
+    note_amount = note_amount or Decimal('0.00')
+    return balance_amount - note_amount
+
+
+def _is_note_entry(entry_type):
+    if not entry_type:
+        return False
+    normalized = str(entry_type).strip().lower()
+    return any(marker in normalized for marker in ['return', 'credit', 'debit', 'note'])
+
+
 @api_view(['GET'])
 def admin_user_products(request, user_id):
     """Returns all products for a specific user (for drill-down view)."""
@@ -222,6 +342,231 @@ def admin_user_products(request, user_id):
         'company':    user.companyid.companyname if user.companyid else '',
         'total':      len(result),
         'products':   result,
+    })
+
+
+@api_view(['GET'])
+def admin_user_customer_supplier_overview(request, user_id):
+    """Returns customer and supplier overview totals for the company's dashboard."""
+    try:
+        user = Users.objects.select_related('companyid').get(userid=user_id)
+    except Users.DoesNotExist:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    company = user.companyid
+    if company is None:
+        empty_summary = _build_financial_summary(0, 0, Decimal('0.00'), 0, Decimal('0.00'), Decimal('0.00'), Decimal('0.00'))
+        return Response({
+            'company': '',
+            'totalCustomers': 0,
+            'totalSuppliers': 0,
+            'customers': empty_summary,
+            'suppliers': empty_summary,
+        })
+
+    customers = Customer.objects.filter(companyid=company)
+    suppliers = Supplier.objects.filter(companyid=company)
+
+    customer_bills = CustomerBill.objects.filter(customerid__companyid=company)
+    supplier_bills = SupplierBill.objects.filter(supplierid__companyid=company)
+
+    customer_note_types = ('Credit Note', 'Credit Notes', 'Credit', 'CreditNote', 'CN', 'Return', 'Sales Return')
+    supplier_note_types = ('Debit Note', 'Debit Notes', 'Debit', 'DebitNote', 'DN', 'Return', 'Purchase Return')
+
+    customer_note_bills = []
+    customer_regular_bills = []
+    for bill in customer_bills:
+        if _is_note_entry(getattr(bill, 'customerbilltype', None)):
+            customer_note_bills.append(bill)
+        else:
+            customer_regular_bills.append(bill)
+
+    supplier_note_bills = []
+    supplier_regular_bills = []
+    for bill in supplier_bills:
+        if _is_note_entry(getattr(bill, 'supplierbilltype', None)):
+            supplier_note_bills.append(bill)
+        else:
+            supplier_regular_bills.append(bill)
+
+    customer_regular_bill_ids = [bill.customerbillid for bill in customer_regular_bills]
+    customer_note_bill_ids = [bill.customerbillid for bill in customer_note_bills]
+    supplier_regular_bill_ids = [bill.supplierbillid for bill in supplier_regular_bills]
+    supplier_note_bill_ids = [bill.supplierbillid for bill in supplier_note_bills]
+
+    customer_regular_bills_qs = customer_bills.filter(customerbillid__in=customer_regular_bill_ids)
+    customer_note_bills_qs = customer_bills.filter(customerbillid__in=customer_note_bill_ids)
+    supplier_regular_bills_qs = supplier_bills.filter(supplierbillid__in=supplier_regular_bill_ids)
+    supplier_note_bills_qs = supplier_bills.filter(supplierbillid__in=supplier_note_bill_ids)
+
+    customer_bills_amount = customer_regular_bills_qs.aggregate(total=Sum('customerbillamount'))['total'] or Decimal('0.00')
+    customer_paid_amount = customer_regular_bills_qs.aggregate(total=Sum('paidamount'))['total'] or Decimal('0.00')
+    customer_balance_amount = customer_regular_bills_qs.aggregate(total=Sum('balance'))['total'] or Decimal('0.00')
+    customer_notes_amount = customer_note_bills_qs.aggregate(total=Sum('customerbillamount'))['total'] or Decimal('0.00')
+    customer_outstanding_amount = _net_outstanding(customer_balance_amount, customer_notes_amount)
+
+    supplier_bills_amount = supplier_regular_bills_qs.aggregate(total=Sum('supplierbillamount'))['total'] or Decimal('0.00')
+    supplier_paid_amount = supplier_regular_bills_qs.aggregate(total=Sum('paidamount'))['total'] or Decimal('0.00')
+    supplier_balance_amount = supplier_regular_bills_qs.aggregate(total=Sum('balance'))['total'] or Decimal('0.00')
+    supplier_notes_amount = supplier_note_bills_qs.aggregate(total=Sum('supplierbillamount'))['total'] or Decimal('0.00')
+    supplier_outstanding_amount = _net_outstanding(supplier_balance_amount, supplier_notes_amount)
+
+    customer_bill_items = []
+    customer_note_items = []
+    customer_payment_items = []
+    for bill in customer_regular_bills:
+        item = {
+            'id': bill.customerbillid,
+            'customer_id': bill.customerid.customerid if getattr(bill, 'customerid', None) else None,
+            'customer_name': bill.customerid.customername if getattr(bill, 'customerid', None) else '',
+            'bill_no': bill.customerbillno or '',
+            'date': str(bill.customerbilldate) if bill.customerbilldate else '',
+            'due_date': str(bill.customerbillduedate) if bill.customerbillduedate else '',
+            'amount': float(bill.customerbillamount or 0),
+            'paid_amount': float(bill.paidamount or 0),
+            'balance': float(bill.balance or 0),
+            'narration': bill.narration or '',
+            'type': bill.customerbilltype or '',
+        }
+        customer_bill_items.append(item)
+        if item['paid_amount'] > 0:
+            customer_payment_items.append({**item, 'status': 'Paid' if item['balance'] <= 0 else 'Partially Paid'})
+
+    for bill in customer_note_bills:
+        customer_note_items.append({
+            'id': bill.customerbillid,
+            'customer_id': bill.customerid.customerid if getattr(bill, 'customerid', None) else None,
+            'customer_name': bill.customerid.customername if getattr(bill, 'customerid', None) else '',
+            'bill_no': bill.customerbillno or '',
+            'date': str(bill.customerbilldate) if bill.customerbilldate else '',
+            'due_date': str(bill.customerbillduedate) if bill.customerbillduedate else '',
+            'amount': float(bill.customerbillamount or 0),
+            'paid_amount': float(bill.paidamount or 0),
+            'balance': float(bill.balance or 0),
+            'narration': bill.narration or '',
+            'type': bill.customerbilltype or '',
+        })
+
+    supplier_bill_items = []
+    supplier_note_items = []
+    supplier_payment_items = []
+    for bill in supplier_regular_bills:
+        item = {
+            'id': bill.supplierbillid,
+            'supplier_id': bill.supplierid.supplierid if getattr(bill, 'supplierid', None) else None,
+            'supplier_name': bill.supplierid.suppliername if getattr(bill, 'supplierid', None) else '',
+            'bill_no': bill.supplierbillno or '',
+            'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+            'due_date': str(bill.supplierbillduedate) if bill.supplierbillduedate else '',
+            'amount': float(bill.supplierbillamount or 0),
+            'paid_amount': float(bill.paidamount or 0),
+            'balance': float(bill.balance or 0),
+            'narration': bill.narration or '',
+            'type': bill.supplierbilltype or '',
+        }
+        supplier_bill_items.append(item)
+        if item['paid_amount'] > 0:
+            supplier_payment_items.append({**item, 'status': 'Paid' if item['balance'] <= 0 else 'Partially Paid'})
+
+    for bill in supplier_note_bills:
+        supplier_note_items.append({
+            'id': bill.supplierbillid,
+            'supplier_id': bill.supplierid.supplierid if getattr(bill, 'supplierid', None) else None,
+            'supplier_name': bill.supplierid.suppliername if getattr(bill, 'supplierid', None) else '',
+            'bill_no': bill.supplierbillno or '',
+            'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+            'due_date': str(bill.supplierbillduedate) if bill.supplierbillduedate else '',
+            'amount': float(bill.supplierbillamount or 0),
+            'paid_amount': float(bill.paidamount or 0),
+            'balance': float(bill.balance or 0),
+            'narration': bill.narration or '',
+            'type': bill.supplierbilltype or '',
+        })
+
+    customer_list = []
+    for customer in customers:
+        customer_entry_bills = CustomerBill.objects.filter(customerid=customer)
+        customer_entry_note_bills = [bill for bill in customer_entry_bills if _is_note_entry(getattr(bill, 'customerbilltype', None))]
+        customer_entry_regular_bills = [bill for bill in customer_entry_bills if not _is_note_entry(getattr(bill, 'customerbilltype', None))]
+        customer_entry_bills_amount = sum(float(b.customerbillamount or 0) for b in customer_entry_regular_bills)
+        customer_entry_notes_amount = sum(float(b.customerbillamount or 0) for b in customer_entry_note_bills)
+        customer_entry_paid_amount = sum(float(b.paidamount or 0) for b in customer_entry_regular_bills)
+        customer_entry_balance_amount = sum(float(b.balance or 0) for b in customer_entry_regular_bills)
+        customer_entry_outstanding_amount = customer_entry_balance_amount - customer_entry_notes_amount
+        customer_list.append({
+            'id': customer.customerid,
+            'name': customer.customername,
+            'gst_number': customer.customergst or '',
+            'phone': customer.customerphonenumber or '',
+            'email': customer.customeremail or '',
+            'address': customer.customeraddress or '',
+            'bills_count': len(customer_entry_regular_bills),
+            'bills_amount': customer_entry_bills_amount,
+            'credit_notes_count': len(customer_entry_note_bills),
+            'credit_notes_amount': customer_entry_notes_amount,
+            'paid_amount': customer_entry_paid_amount,
+            'balance_amount': customer_entry_outstanding_amount,
+        })
+
+    customer_summary = _build_financial_summary(
+        total_count=customers.count(),
+        bill_count=sum(int(item['bills_count']) for item in customer_list),
+        bill_amount=sum(float(item['bills_amount']) for item in customer_list),
+        note_count=sum(int(item['credit_notes_count']) for item in customer_list),
+        note_amount=sum(float(item['credit_notes_amount']) for item in customer_list),
+        paid_amount=sum(float(item['paid_amount']) for item in customer_list),
+        balance_amount=sum(float(item['balance_amount']) for item in customer_list),
+    )
+
+    supplier_list = []
+    for supplier in suppliers:
+        supplier_entry_bills = SupplierBill.objects.filter(supplierid=supplier)
+        supplier_entry_note_bills = [bill for bill in supplier_entry_bills if _is_note_entry(getattr(bill, 'supplierbilltype', None))]
+        supplier_entry_regular_bills = [bill for bill in supplier_entry_bills if not _is_note_entry(getattr(bill, 'supplierbilltype', None))]
+        supplier_entry_bills_amount = sum(float(b.supplierbillamount or 0) for b in supplier_entry_regular_bills)
+        supplier_entry_notes_amount = sum(float(b.supplierbillamount or 0) for b in supplier_entry_note_bills)
+        supplier_entry_paid_amount = sum(float(b.paidamount or 0) for b in supplier_entry_regular_bills)
+        supplier_entry_balance_amount = sum(float(b.balance or 0) for b in supplier_entry_regular_bills)
+        supplier_entry_outstanding_amount = supplier_entry_balance_amount - supplier_entry_notes_amount
+        supplier_list.append({
+            'id': supplier.supplierid,
+            'name': supplier.suppliername,
+            'gst_number': supplier.suppliergst or '',
+            'phone': supplier.supplierphonenumber or '',
+            'email': supplier.supplieremail or '',
+            'address': supplier.supplieraddress or '',
+            'bills_count': len(supplier_entry_regular_bills),
+            'bills_amount': supplier_entry_bills_amount,
+            'debit_notes_count': len(supplier_entry_note_bills),
+            'debit_notes_amount': supplier_entry_notes_amount,
+            'paid_amount': supplier_entry_paid_amount,
+            'balance_amount': supplier_entry_outstanding_amount,
+        })
+
+    supplier_summary = _build_financial_summary(
+        total_count=suppliers.count(),
+        bill_count=sum(int(item['bills_count']) for item in supplier_list),
+        bill_amount=sum(float(item['bills_amount']) for item in supplier_list),
+        note_count=sum(int(item['debit_notes_count']) for item in supplier_list),
+        note_amount=sum(float(item['debit_notes_amount']) for item in supplier_list),
+        paid_amount=sum(float(item['paid_amount']) for item in supplier_list),
+        balance_amount=sum(float(item['balance_amount']) for item in supplier_list),
+    )
+
+    return Response({
+        'company': company.companyname,
+        'totalCustomers': customer_summary['count'],
+        'totalSuppliers': supplier_summary['count'],
+        'customers': customer_summary,
+        'customer_list': customer_list,
+        'customer_bills': customer_bill_items,
+        'customer_notes': customer_note_items,
+        'customer_payments': customer_payment_items,
+        'suppliers': supplier_summary,
+        'supplier_list': supplier_list,
+        'supplier_bills': supplier_bill_items,
+        'supplier_notes': supplier_note_items,
+        'supplier_payments': supplier_payment_items,
     })
 
 @api_view(['GET'])
@@ -282,7 +627,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         return ','.join(saved_paths)
 
     def create(self, request, *args, **kwargs):
-        data = request.data.copy()
+        data = request.data.dict() if hasattr(request.data, 'dict') else dict(request.data)
         if 'productphotopath' in request.FILES:
             data['productphotopath'] = self._handle_image_uploads(request)
         data['addtype'] = 'Single'   # mark as single add
@@ -305,7 +650,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
-        data = request.data.copy()
+        data = request.data.dict() if hasattr(request.data, 'dict') else dict(request.data)
         
         if 'productphotopath' in request.FILES or 'retained_images' in request.data:
             data['productphotopath'] = self._handle_image_uploads(request, str(instance.productphotopath or ''))
@@ -460,3 +805,82 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
 class ProductUnitViewSet(viewsets.ModelViewSet):
     queryset = Productunit.objects.all()
     serializer_class = ProductUnitSerializer
+
+@api_view(['GET'])
+def search_supplier_globally(request):
+    phone = request.GET.get('phone')
+    gstn = request.GET.get('gstn')
+    
+    supplier = None
+    if phone:
+        supplier = Supplieruser.objects.filter(supplieruserphone=phone).first()
+    elif gstn:
+        supplier = Supplieruser.objects.filter(supplierusergstnumber=gstn).first()
+        
+    if supplier:
+        return Response({
+            'id': supplier.supplieruserid,
+            'name': supplier.suppliername,
+            'phone': supplier.supplieruserphone,
+            'gst_number': supplier.supplierusergstnumber,
+            'email': supplier.supplieruseremail,
+            'address': supplier.supplieruseraddress,
+        }, status=status.HTTP_200_OK)
+    
+    return Response({'message': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['GET'])
+def search_local_supplier(request):
+    phone = request.GET.get('phone')
+    gstn = request.GET.get('gstn')
+    
+    supplier = None
+    if phone:
+        supplier = Supplier.objects.filter(supplierphonenumber=phone).first()
+    elif gstn:
+        supplier = Supplier.objects.filter(suppliergst=gstn).first()
+        
+    if supplier:
+        return Response({
+            'id': supplier.supplierid,
+            'name': supplier.suppliername,
+            'phone': supplier.supplierphonenumber,
+            'gst_number': supplier.suppliergst,
+            'email': supplier.supplieremail,
+            'address': supplier.supplieraddress,
+        }, status=status.HTTP_200_OK)
+    
+    return Response({'message': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['POST'])
+def onboard_supplier(request):
+    data = request.data
+    try:
+        phone = data.get('phone')
+        username = data.get('username')
+        
+        if phone and Supplieruser.objects.filter(supplieruserphone=phone).exists():
+            return Response({'error': 'Supplier with this phone already exists'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        if username and Supplieruser.objects.filter(supplierusername=username).exists():
+            return Response({'error': 'Username already taken'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        supplier = Supplieruser.objects.create(
+            suppliername=data.get('name'),
+            supplierusername=username,
+            supplieruserpassword=data.get('password'),
+            supplieruserphone=phone,
+            supplieruseremail=data.get('email'),
+            supplierusergstnumber=data.get('gst_number'),
+            supplieruseraddress=data.get('address')
+        )
+        
+        return Response({
+            'success': True,
+            'supplier_id': supplier.supplieruserid,
+            'username': supplier.supplierusername,
+            'password': supplier.supplieruserpassword,
+            'message': 'Successfully onboarded the supplier'
+        }, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

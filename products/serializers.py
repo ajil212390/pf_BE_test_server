@@ -1,6 +1,11 @@
 from rest_framework import serializers
 from .models import Products, Productcategory, Productunit
+from .models import EndUser  # add EndUser to the existing import line
 
+class EndUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EndUser
+        fields = '__all__'
 class ProductCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Productcategory

@@ -5,6 +5,9 @@ from .views import (
     register_user, login_user, update_company, change_password,
     admin_overview, admin_companies, admin_users, admin_products,
     admin_user_products, admin_company_products,
+    admin_user_customer_supplier_overview,
+    register_enduser, login_enduser, login_supplier,
+    search_supplier_globally, search_local_supplier, onboard_supplier,
 )
 
 router = DefaultRouter()
@@ -23,5 +26,12 @@ urlpatterns = [
     path('admin/users/', admin_users),
     path('admin/products/', admin_products),
     path('admin/user/<int:user_id>/products/', admin_user_products),
+    path('admin/user/<int:user_id>/customer-supplier-overview/', admin_user_customer_supplier_overview),
     path('admin/company/<int:company_id>/products/', admin_company_products),
+    path('register-enduser/', register_enduser),
+    path('login-enduser/', login_enduser),
+    path('login-supplier/', login_supplier),
+    path('supplier/search/', search_supplier_globally),
+    path('supplier/search-local/', search_local_supplier),
+    path('supplier/onboard/', onboard_supplier),
 ]
