@@ -81,6 +81,7 @@ class Supplier(models.Model):
     supplieropeningbal = models.DecimalField(max_digits=18, decimal_places=2, blank=True, null=True)
     supplierpincode = models.CharField(max_length=20, blank=True, null=True)
     suppliergst = models.CharField(max_length=50, blank=True, null=True)
+    isconneted = models.BooleanField(default=False, db_column='isconneted')
     supplierstate = models.CharField(max_length=100, blank=True, null=True)
     supplierpanno = models.CharField(max_length=20, blank=True, null=True)
     companyid = models.ForeignKey(Company, models.DO_NOTHING, db_column='companyid')

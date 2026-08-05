@@ -11,6 +11,7 @@ import csv
 import io
 from datetime import datetime, date
 from django.db.models import Sum
+from django.db import transaction
 
 @api_view(['POST'])
 def register_enduser(request):
@@ -848,9 +849,124 @@ def search_local_supplier(request):
             'gst_number': supplier.suppliergst,
             'email': supplier.supplieremail,
             'address': supplier.supplieraddress,
+            'isconneted': bool(supplier.isconneted),
         }, status=status.HTTP_200_OK)
     
     return Response({'message': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['POST'])
+def connect_supplier(request):
+    data = request.data
+    supplier_user_id = data.get('supplieruserid') or data.get('supplier_user_id') or data.get('supplier_id')
+    company_user_id = data.get('userid') or data.get('user_id') or data.get('company_user_id')
+
+    if not supplier_user_id or not company_user_id:
+        return Response({'error': 'supplieruserid and userid are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        supplier_user = Supplieruser.objects.get(supplieruserid=supplier_user_id)
+    except Supplieruser.DoesNotExist:
+        return Response({'error': 'Supplier user not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        company_user = Users.objects.select_related('companyid').get(userid=company_user_id)
+    except Users.DoesNotExist:
+        return Response({'error': 'Company user not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    company = company_user.companyid
+    if company is None:
+        return Response({'error': 'Company not found for this user.'}, status=status.HTTP_404_NOT_FOUND)
+
+    local_supplier = None
+    phone = supplier_user.supplieruserphone
+    gst = supplier_user.supplierusergstnumber
+
+    if phone:
+        local_supplier = Supplier.objects.filter(companyid=company, supplierphonenumber=phone).first()
+    if not local_supplier and gst:
+        local_supplier = Supplier.objects.filter(companyid=company, suppliergst=gst).first()
+
+    if not local_supplier:
+        local_supplier = Supplier.objects.create(
+            suppliername=supplier_user.suppliername or '',
+            supplierphonenumber=phone,
+            supplieraddress=supplier_user.supplieruseraddress,
+            supplieremail=supplier_user.supplieruseremail,
+            suppliergst=gst,
+            isconneted=True,
+            companyid=company
+        )
+    else:
+        updated = False
+        if not local_supplier.isconneted:
+            local_supplier.isconneted = True
+            updated = True
+        if supplier_user.suppliername and supplier_user.suppliername != local_supplier.suppliername:
+            local_supplier.suppliername = supplier_user.suppliername
+            updated = True
+        if supplier_user.supplieruseraddress and supplier_user.supplieruseraddress != local_supplier.supplieraddress:
+            local_supplier.supplieraddress = supplier_user.supplieruseraddress
+            updated = True
+        if supplier_user.supplieruseremail and supplier_user.supplieruseremail != local_supplier.supplieremail:
+            local_supplier.supplieremail = supplier_user.supplieruseremail
+            updated = True
+        if supplier_user.supplierusergstnumber and supplier_user.supplierusergstnumber != local_supplier.suppliergst:
+            local_supplier.suppliergst = supplier_user.supplierusergstnumber
+            updated = True
+        if updated:
+            local_supplier.save()
+
+    return Response({
+        'success': True,
+        'message': 'Supplier connected successfully.',
+        'supplier_id': local_supplier.supplierid,
+        'supplier_user_id': supplier_user.supplieruserid,
+    }, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+def supplier_bills(request, supplier_user_id):
+    try:
+        supplier_user = Supplieruser.objects.get(supplieruserid=supplier_user_id)
+    except Supplieruser.DoesNotExist:
+        return Response({'error': 'Supplier user not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    suppliers = Supplier.objects.none()
+    if supplier_user.supplieruserphone:
+        suppliers = Supplier.objects.filter(supplierphonenumber=supplier_user.supplieruserphone)
+    if supplier_user.supplierusergstnumber:
+        gst_suppliers = Supplier.objects.filter(suppliergst=supplier_user.supplierusergstnumber)
+        suppliers = (suppliers | gst_suppliers).distinct()
+
+    bills = (
+        SupplierBill.objects
+        .select_related('supplierid__companyid')
+        .filter(supplierid__in=suppliers)
+        .order_by('-supplierbilldate', '-supplierbillid')
+    )
+
+    result = []
+    for bill in bills:
+        company = bill.supplierid.companyid if getattr(bill, 'supplierid', None) else None
+        result.append({
+            'id': bill.supplierbillid,
+            'supplier_id': bill.supplierid.supplierid if getattr(bill, 'supplierid', None) else None,
+            'supplier_name': bill.supplierid.suppliername if getattr(bill, 'supplierid', None) else '',
+            'bill_no': bill.supplierbillno or '',
+            'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+            'amount': float(bill.supplierbillamount or 0),
+            'paid_amount': float(bill.paidamount or 0),
+            'balance': float(bill.balance or 0),
+            'type': bill.supplierbilltype or '',
+            'narration': bill.narration or '',
+            'company_id': company.companyid if company else None,
+            'company_name': company.companyname if company else '',
+            'company_phone': str(company.companyphonenumber) if company and company.companyphonenumber else '',
+            'company_email': '',
+            'company_gst': '',
+            'company_address': '',
+        })
+
+    return Response(result, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 def onboard_supplier(request):
@@ -858,29 +974,70 @@ def onboard_supplier(request):
     try:
         phone = data.get('phone')
         username = data.get('username')
-        
-        if phone and Supplieruser.objects.filter(supplieruserphone=phone).exists():
-            return Response({'error': 'Supplier with this phone already exists'}, status=status.HTTP_400_BAD_REQUEST)
-            
-        if username and Supplieruser.objects.filter(supplierusername=username).exists():
-            return Response({'error': 'Username already taken'}, status=status.HTTP_400_BAD_REQUEST)
-            
-        supplier = Supplieruser.objects.create(
-            suppliername=data.get('name'),
-            supplierusername=username,
-            supplieruserpassword=data.get('password'),
-            supplieruserphone=phone,
-            supplieruseremail=data.get('email'),
-            supplierusergstnumber=data.get('gst_number'),
-            supplieruseraddress=data.get('address')
-        )
-        
-        return Response({
+        # determine company context (accept either userid or companyid)
+        company = None
+        user_id = data.get('userid') or data.get('user_id')
+        company_id = data.get('companyid') or data.get('company_id')
+        if user_id:
+            try:
+                user_obj = Users.objects.select_related('companyid').get(userid=user_id)
+                company = user_obj.companyid
+            except Users.DoesNotExist:
+                company = None
+        elif company_id:
+            try:
+                company = Company.objects.get(companyid=company_id)
+            except Company.DoesNotExist:
+                company = None
+
+        with transaction.atomic():
+            if phone and Supplieruser.objects.filter(supplieruserphone=phone).exists():
+                return Response({'error': 'Supplier with this phone already exists'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if username and Supplieruser.objects.filter(supplierusername=username).exists():
+                return Response({'error': 'Username already taken'}, status=status.HTTP_400_BAD_REQUEST)
+
+            supplier_user = Supplieruser.objects.create(
+                suppliername=data.get('name'),
+                supplierusername=username,
+                supplieruserpassword=data.get('password'),
+                supplieruserphone=phone,
+                supplieruseremail=data.get('email'),
+                supplierusergstnumber=data.get('gst_number'),
+                supplieruseraddress=data.get('address')
+            )
+
+            # If company context is provided, ensure a local Supplier entry exists for that company
+            created_local_supplier = None
+            if company:
+                gst = data.get('gst_number')
+                # prefer matching by phone, then GST, then by name
+                local_supplier = None
+                if phone:
+                    local_supplier = Supplier.objects.filter(companyid=company, supplierphonenumber=phone).first()
+                if not local_supplier and gst:
+                    local_supplier = Supplier.objects.filter(companyid=company, suppliergst=gst).first()
+                if not local_supplier:
+                    local_supplier = Supplier.objects.create(
+                        suppliername=data.get('name') or supplier_user.suppliername,
+                        supplierphonenumber=phone,
+                        supplieraddress=data.get('address'),
+                        supplieremail=data.get('email'),
+                        suppliergst=gst,
+                        companyid=company
+                    )
+                    created_local_supplier = local_supplier
+
+        resp = {
             'success': True,
-            'supplier_id': supplier.supplieruserid,
-            'username': supplier.supplierusername,
-            'password': supplier.supplieruserpassword,
+            'id': supplier_user.supplieruserid,
+            'supplier_user_id': supplier_user.supplieruserid,
+            'username': supplier_user.supplierusername,
             'message': 'Successfully onboarded the supplier'
-        }, status=status.HTTP_201_CREATED)
+        }
+        if created_local_supplier:
+            resp['supplier_id'] = created_local_supplier.supplierid
+
+        return Response(resp, status=status.HTTP_201_CREATED)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

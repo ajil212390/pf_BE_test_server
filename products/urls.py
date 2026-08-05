@@ -33,5 +33,7 @@ urlpatterns = [
     path('login-supplier/', login_supplier),
     path('supplier/search/', search_supplier_globally),
     path('supplier/search-local/', search_local_supplier),
+    path('supplier/connect/', connect_supplier),
     path('supplier/onboard/', onboard_supplier),
+    path('supplier/<int:supplier_user_id>/bills/', supplier_bills),
 ]
