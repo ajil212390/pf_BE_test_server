@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Products, Productcategory, Productunit
+from .models import Products, Productcategory, Productunit, Company, Companycategory
 from .models import EndUser  # add EndUser to the existing import line
 
 class EndUserSerializer(serializers.ModelSerializer):
@@ -14,6 +14,16 @@ class ProductCategorySerializer(serializers.ModelSerializer):
 class ProductUnitSerializer(serializers.ModelSerializer):
     class Meta:
         model = Productunit
+        fields = '__all__'
+
+class CompanyCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Companycategory
+        fields = '__all__'
+
+class CompanySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Company
         fields = '__all__'
 
 class ProductSerializer(serializers.ModelSerializer):

@@ -1,8 +1,8 @@
 from decimal import Decimal
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-from .models import Products, Productcategory, Productunit, Company, Users, Customer, Supplier, CustomerBill, SupplierBill, EndUser, Supplieruser
-from .serializers import ProductSerializer, ProductCategorySerializer, ProductUnitSerializer
+from .models import Products, Productcategory, Productunit, Company, Users, Customer, Supplier, CustomerBill, SupplierBill, EndUser, Supplieruser, Companycategory
+from .serializers import ProductSerializer, ProductCategorySerializer, ProductUnitSerializer, CompanySerializer, CompanyCategorySerializer
 from django.core.files.storage import default_storage
 import uuid
 from rest_framework.decorators import action, api_view
@@ -10,7 +10,7 @@ import openpyxl
 import csv
 import io
 from datetime import datetime, date
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.db import transaction
 
 @api_view(['POST'])
@@ -38,18 +38,26 @@ def register_enduser(request):
 @api_view(['POST'])
 def login_supplier(request):
     data = request.data
-    username = data.get('supplierusername') or data.get('username')
+    username_or_phone = data.get('supplierusername') or data.get('username') or data.get('supplieruserphone') or data.get('phone')
     password = data.get('supplieruserpassword') or data.get('password')
 
-    if not username or not password:
-        return Response({'error': 'Username and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if not username_or_phone or not password:
+        return Response({'error': 'Username (or phone) and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        supplier_user = Supplieruser.objects.get(supplierusername__iexact=username)
+        supplier_user = Supplieruser.objects.filter(
+            Q(supplierusername__iexact=username_or_phone) |
+            Q(supplieruserphone__iexact=username_or_phone)
+        ).first()
+
+        if not supplier_user:
+            return Response({'error': 'Username or phone not found.'}, status=status.HTTP_404_NOT_FOUND)
+
         if supplier_user.supplieruserpassword == password:
             return Response({
                 'message': 'Login successful',
                 'supplieruserid': supplier_user.supplieruserid,
+                'supplierid': supplier_user.supplierid_id,
                 'suppliername': supplier_user.suppliername or '',
                 'supplierusername': supplier_user.supplierusername,
                 'supplieruseremail': supplier_user.supplieruseremail or '',
@@ -58,8 +66,8 @@ def login_supplier(request):
                 'supplieruseraddress': supplier_user.supplieruseraddress or '',
             }, status=status.HTTP_200_OK)
         return Response({'error': 'Incorrect password.'}, status=status.HTTP_401_UNAUTHORIZED)
-    except Supplieruser.DoesNotExist:
-        return Response({'error': 'Username not found.'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['POST'])
@@ -603,9 +611,24 @@ def admin_company_products(request, company_id):
         'products':   result,
     })
 
+class CompanyViewSet(viewsets.ModelViewSet):
+    queryset = Company.objects.all()
+    serializer_class = CompanySerializer
+
+class CompanyCategoryViewSet(viewsets.ModelViewSet):
+    queryset = Companycategory.objects.all()
+    serializer_class = CompanyCategorySerializer
+
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Products.objects.all()
     serializer_class = ProductSerializer
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        company_id = self.request.query_params.get('companyid')
+        if company_id:
+            queryset = queryset.filter(companyid=company_id)
+        return queryset
 
     def get_serializer_context(self):
         return {'request': self.request}
@@ -821,6 +844,7 @@ def search_supplier_globally(request):
     if supplier:
         return Response({
             'id': supplier.supplieruserid,
+            'supplier_id': supplier.supplierid_id,
             'name': supplier.suppliername,
             'phone': supplier.supplieruserphone,
             'gst_number': supplier.supplierusergstnumber,
@@ -849,7 +873,7 @@ def search_local_supplier(request):
             'gst_number': supplier.suppliergst,
             'email': supplier.supplieremail,
             'address': supplier.supplieraddress,
-            'isconneted': bool(supplier.isconneted),
+            'isconnected': bool(supplier.isconnected),
         }, status=status.HTTP_200_OK)
     
     return Response({'message': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -893,13 +917,13 @@ def connect_supplier(request):
             supplieraddress=supplier_user.supplieruseraddress,
             supplieremail=supplier_user.supplieruseremail,
             suppliergst=gst,
-            isconneted=True,
+            isconnected=1,
             companyid=company
         )
     else:
         updated = False
-        if not local_supplier.isconneted:
-            local_supplier.isconneted = True
+        if not local_supplier.isconnected:
+            local_supplier.isconnected = 1
             updated = True
         if supplier_user.suppliername and supplier_user.suppliername != local_supplier.suppliername:
             local_supplier.suppliername = supplier_user.suppliername
@@ -916,6 +940,11 @@ def connect_supplier(request):
         if updated:
             local_supplier.save()
 
+    # Link the SupplierUser to the local Supplier via FK
+    if supplier_user.supplierid_id != local_supplier.supplierid:
+        supplier_user.supplierid = local_supplier
+        supplier_user.save(update_fields=['supplierid'])
+
     return Response({
         'success': True,
         'message': 'Supplier connected successfully.',
@@ -930,12 +959,19 @@ def supplier_bills(request, supplier_user_id):
     except Supplieruser.DoesNotExist:
         return Response({'error': 'Supplier user not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-    suppliers = Supplier.objects.none()
+    # Find ALL matching supplier records across companies
+    # 1. By exact FK if exists
+    suppliers_q = Q()
+    if supplier_user.supplierid_id:
+        suppliers_q |= Q(supplierid=supplier_user.supplierid_id)
+    # 2. By phone number
     if supplier_user.supplieruserphone:
-        suppliers = Supplier.objects.filter(supplierphonenumber=supplier_user.supplieruserphone)
+        suppliers_q |= Q(supplierphonenumber=supplier_user.supplieruserphone)
+    # 3. By GST number
     if supplier_user.supplierusergstnumber:
-        gst_suppliers = Supplier.objects.filter(suppliergst=supplier_user.supplierusergstnumber)
-        suppliers = (suppliers | gst_suppliers).distinct()
+        suppliers_q |= Q(suppliergst=supplier_user.supplierusergstnumber)
+        
+    suppliers = Supplier.objects.filter(suppliers_q).distinct() if suppliers_q else Supplier.objects.none()
 
     bills = (
         SupplierBill.objects
@@ -944,29 +980,164 @@ def supplier_bills(request, supplier_user_id):
         .order_by('-supplierbilldate', '-supplierbillid')
     )
 
-    result = []
-    for bill in bills:
-        company = bill.supplierid.companyid if getattr(bill, 'supplierid', None) else None
-        result.append({
-            'id': bill.supplierbillid,
-            'supplier_id': bill.supplierid.supplierid if getattr(bill, 'supplierid', None) else None,
-            'supplier_name': bill.supplierid.suppliername if getattr(bill, 'supplierid', None) else '',
-            'bill_no': bill.supplierbillno or '',
-            'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
-            'amount': float(bill.supplierbillamount or 0),
-            'paid_amount': float(bill.paidamount or 0),
-            'balance': float(bill.balance or 0),
-            'type': bill.supplierbilltype or '',
-            'narration': bill.narration or '',
-            'company_id': company.companyid if company else None,
-            'company_name': company.companyname if company else '',
-            'company_phone': str(company.companyphonenumber) if company and company.companyphonenumber else '',
+    try:
+        result = []
+        for bill in bills:
+            company = bill.supplierid.companyid if getattr(bill, 'supplierid', None) else None
+            result.append({
+                'id': bill.supplierbillid,
+                'supplier_id': bill.supplierid.supplierid if getattr(bill, 'supplierid', None) else None,
+                'supplier_name': bill.supplierid.suppliername if getattr(bill, 'supplierid', None) else '',
+                'bill_no': bill.supplierbillno or '',
+                'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+                'amount': float(bill.supplierbillamount or 0),
+                'paid_amount': float(bill.paidamount or 0),
+                'balance': float(bill.balance or 0),
+                'type': bill.supplierbilltype or '',
+                'narration': bill.narration or '',
+                'company_id': company.companyid if company else None,
+                'company_name': company.companyname if company else '',
+                'company_phone': str(company.companyphonenumber) if company and company.companyphonenumber else '',
+                'company_email': '',
+                'company_gst': '',
+                'company_address': '',
+            })
+
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+def supplier_dashboard(request, supplier_user_id):
+    try:
+        supplier_user = Supplieruser.objects.get(supplieruserid=supplier_user_id)
+    except Supplieruser.DoesNotExist:
+        return Response({'error': 'Supplier user not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+    # Find ALL matching supplier records across companies
+    suppliers_q = Q()
+    if supplier_user.supplierid_id:
+        suppliers_q |= Q(supplierid=supplier_user.supplierid_id)
+    if supplier_user.supplieruserphone:
+        suppliers_q |= Q(supplierphonenumber=supplier_user.supplieruserphone)
+    if supplier_user.supplierusergstnumber:
+        suppliers_q |= Q(suppliergst=supplier_user.supplierusergstnumber)
+        
+    suppliers = Supplier.objects.select_related('companyid').filter(suppliers_q).distinct() if suppliers_q else Supplier.objects.none()
+
+    companies_data = []
+    total_bills = 0
+    total_paid = 0.0
+    total_balance = 0.0
+    total_amount = 0.0
+    total_debit_notes_count = 0
+    total_debit_notes_amount = 0.0
+
+    for supplier in suppliers:
+        company = supplier.companyid
+        if not company:
+            continue
+            
+        bills = SupplierBill.objects.filter(supplierid=supplier)
+        
+        comp_bills_count = 0
+        comp_amount = 0.0
+        comp_paid = 0.0
+        comp_balance = 0.0
+        comp_debit_notes = 0
+        comp_debit_amount = 0.0
+        
+        main_bills = []
+        payment_bills = []
+        for bill in bills:
+            bill_type = (bill.supplierbilltype or '').lower()
+            bill_no = (bill.supplierbillno or '').lower()
+            if 'receipt' in bill_type or 'payment' in bill_type or 'payments' in bill_type or bill_no.startswith('rcpt') or 'rcpt-' in bill_no or bill_no.startswith('pay') or 'pay-' in bill_no:
+                payment_bills.append(bill)
+            else:
+                main_bills.append(bill)
+                
+        for bill in main_bills:
+            amount = float(bill.supplierbillamount or 0)
+            paid = float(bill.paidamount or 0)
+            bal = float(bill.balance or 0)
+            
+            bill_type = (bill.supplierbilltype or '').lower()
+            if 'return' in bill_type or 'credit' in bill_type or 'refund' in bill_type or bill.supplierbilltype == 'Debit Note':
+                comp_debit_notes += 1
+                comp_debit_amount += amount
+                total_debit_notes_count += 1
+                total_debit_notes_amount += amount
+                continue
+                
+            matched_payments_sum = 0.0
+            bill_no = (bill.supplierbillno or '').strip().lower()
+            bill_id = str(bill.supplierbillid or '').strip().lower()
+            
+            for p in payment_bills:
+                p_type = (p.supplierbilltype or '').lower()
+                p_no = (p.supplierbillno or '').lower()
+                p_ref = (getattr(p, 'reference', '') or '').lower()
+                p_against = (getattr(p, 'against', '') or '').lower()
+                
+                refs = [
+                    p_ref, p_against, p_no, str(p.supplierbillid or '').lower()
+                ]
+                
+                is_match = False
+                if bill_no and bill_no in refs:
+                    is_match = True
+                elif bill_id and bill_id in refs:
+                    is_match = True
+                elif bill_no and bill_no in p_no:
+                    is_match = True
+                    
+                if is_match:
+                    p_amt = float(p.supplierbillamount or p.paidamount or 0)
+                    matched_payments_sum += p_amt
+            
+            actual_paid = matched_payments_sum if matched_payments_sum > 0 else paid
+            
+            comp_bills_count += 1
+            comp_amount += amount
+            comp_paid += actual_paid
+            comp_balance += amount - actual_paid
+            
+            total_bills += 1
+            total_amount += amount
+            total_paid += actual_paid
+            total_balance += amount - actual_paid
+
+        companies_data.append({
+            'company_id': company.companyid,
+            'company_name': company.companyname or '',
+            'company_phone': company.companyphonenumber or '',
             'company_email': '',
-            'company_gst': '',
             'company_address': '',
+            'supplier_id': supplier.supplierid,
+            'is_connected': supplier.isconnected,
+            'summary': {
+                'bills_count': comp_bills_count,
+                'total_amount': comp_amount,
+                'paid_amount': comp_paid,
+                'balance': comp_balance,
+                'debit_notes_count': comp_debit_notes,
+                'debit_notes_amount': comp_debit_amount,
+            }
         })
 
-    return Response(result, status=status.HTTP_200_OK)
+    return Response({
+        'overview': {
+            'total_companies': len(companies_data),
+            'total_bills': total_bills,
+            'total_amount': total_amount,
+            'total_paid': total_paid,
+            'total_balance': total_balance,
+            'total_debit_notes': total_debit_notes_count,
+            'total_debit_amount': total_debit_notes_amount,
+        },
+        'companies': companies_data
+    }, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
 def onboard_supplier(request):
@@ -1008,7 +1179,6 @@ def onboard_supplier(request):
             )
 
             # If company context is provided, ensure a local Supplier entry exists for that company
-            created_local_supplier = None
             if company:
                 gst = data.get('gst_number')
                 # prefer matching by phone, then GST, then by name
@@ -1024,19 +1194,27 @@ def onboard_supplier(request):
                         supplieraddress=data.get('address'),
                         supplieremail=data.get('email'),
                         suppliergst=gst,
+                        isconnected=1,
                         companyid=company
                     )
-                    created_local_supplier = local_supplier
+                else:
+                    # Mark existing local supplier as connected
+                    if not local_supplier.isconnected:
+                        local_supplier.isconnected = 1
+                        local_supplier.save(update_fields=['isconnected'])
+                # Link the SupplierUser to the local Supplier via FK
+                supplier_user.supplierid = local_supplier
+                supplier_user.save(update_fields=['supplierid'])
 
         resp = {
             'success': True,
             'id': supplier_user.supplieruserid,
             'supplier_user_id': supplier_user.supplieruserid,
+            'supplier_id': supplier_user.supplierid_id,
             'username': supplier_user.supplierusername,
+            'password': supplier_user.supplieruserpassword or '',
             'message': 'Successfully onboarded the supplier'
         }
-        if created_local_supplier:
-            resp['supplier_id'] = created_local_supplier.supplierid
 
         return Response(resp, status=status.HTTP_201_CREATED)
     except Exception as e:

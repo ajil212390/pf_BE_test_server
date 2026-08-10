@@ -16,10 +16,21 @@ class Productunit(models.Model):
         managed = False
         db_table = 'productunit'
 
+class Companycategory(models.Model):
+    categoryid = models.AutoField(primary_key=True)
+    categoryname = models.CharField(max_length=30)
+
+    class Meta:
+        managed = False
+        db_table = 'companycategory'
+
 class Company(models.Model):
     companyid = models.AutoField(primary_key=True)
     companyname = models.CharField(max_length=200)
     companyphonenumber = models.BigIntegerField(blank=True, null=True)
+    companylocation = models.CharField(max_length=200, blank=True, null=True)
+    companyaddress = models.TextField(blank=True, null=True)
+    categoryid = models.ForeignKey(Companycategory, models.DO_NOTHING, db_column='categoryid', blank=True, null=True)
 
     class Meta:
         managed = False
@@ -81,7 +92,7 @@ class Supplier(models.Model):
     supplieropeningbal = models.DecimalField(max_digits=18, decimal_places=2, blank=True, null=True)
     supplierpincode = models.CharField(max_length=20, blank=True, null=True)
     suppliergst = models.CharField(max_length=50, blank=True, null=True)
-    isconneted = models.BooleanField(default=False, db_column='isconneted')
+    isconnected = models.SmallIntegerField(default=0, db_column='isconnected')
     supplierstate = models.CharField(max_length=100, blank=True, null=True)
     supplierpanno = models.CharField(max_length=20, blank=True, null=True)
     companyid = models.ForeignKey(Company, models.DO_NOTHING, db_column='companyid')
@@ -135,6 +146,7 @@ class EndUser(models.Model):
 
 class Supplieruser(models.Model):
     supplieruserid = models.AutoField(primary_key=True)
+    supplierid = models.ForeignKey(Supplier, models.DO_NOTHING, db_column='supplierid', blank=True, null=True)
     suppliername = models.CharField(max_length=25, blank=True, null=True)
     supplierusername = models.CharField(max_length=25, blank=True, null=True)
     supplieruserphone = models.CharField(max_length=20, blank=True, null=True)

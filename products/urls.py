@@ -2,18 +2,21 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     ProductViewSet, ProductCategoryViewSet, ProductUnitViewSet,
+    CompanyViewSet, CompanyCategoryViewSet,
     register_user, login_user, update_company, change_password,
     admin_overview, admin_companies, admin_users, admin_products,
     admin_user_products, admin_company_products,
     admin_user_customer_supplier_overview,
     register_enduser, login_enduser, login_supplier,
-    search_supplier_globally, search_local_supplier, onboard_supplier,
+    search_supplier_globally, search_local_supplier, connect_supplier, supplier_bills, onboard_supplier, supplier_dashboard
 )
 
 router = DefaultRouter()
 router.register(r'products', ProductViewSet)
 router.register(r'categories', ProductCategoryViewSet)
 router.register(r'units', ProductUnitViewSet)
+router.register(r'companies', CompanyViewSet)
+router.register(r'companycategories', CompanyCategoryViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -36,4 +39,5 @@ urlpatterns = [
     path('supplier/connect/', connect_supplier),
     path('supplier/onboard/', onboard_supplier),
     path('supplier/<int:supplier_user_id>/bills/', supplier_bills),
+    path('supplier/<int:supplier_user_id>/dashboard/', supplier_dashboard),
 ]
