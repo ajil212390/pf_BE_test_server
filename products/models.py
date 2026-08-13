@@ -158,3 +158,81 @@ class Supplieruser(models.Model):
     class Meta:
         managed = False
         db_table = 'supplieruser'
+
+class Conversation(models.Model):
+    id = models.AutoField(primary_key=True)
+    company = models.ForeignKey(Company, models.DO_NOTHING, db_column='companyid')
+    enduser = models.ForeignKey(EndUser, models.DO_NOTHING, db_column='endsuerid')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = True
+        db_table = 'conversation'
+        unique_together = (('company', 'enduser'),)
+
+class ChatMessage(models.Model):
+    id = models.AutoField(primary_key=True)
+    conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='messages')
+    sender_type = models.CharField(max_length=20) # 'company' or 'enduser'
+    text_content = models.TextField(blank=True, null=True)
+    audio_file = models.FileField(upload_to='chat_audio/', blank=True, null=True)
+    duration = models.IntegerField(blank=True, null=True, help_text="Duration in seconds")
+    waveform = models.TextField(blank=True, null=True, help_text="JSON list of waveform floats")
+    is_read = models.BooleanField(default=False)
+    timestamp = models.DateTimeField(auto_now_add=True)
+    order_status = models.CharField(max_length=20, default='pending')
+
+    class Meta:
+        managed = True
+        db_table = 'chat_message'
+
+class SupplierExecutive(models.Model):
+    executiveid = models.AutoField(primary_key=True)
+    manager = models.ForeignKey(Supplieruser, on_delete=models.CASCADE, related_name='executives')
+    executive_name = models.CharField(max_length=100)
+    executive_username = models.CharField(max_length=100, unique=True)
+    executive_password = models.CharField(max_length=100)
+    executive_phone = models.CharField(max_length=20, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = True
+        db_table = 'supplier_executive'
+
+class ExecutiveAllocation(models.Model):
+    allocation_id = models.AutoField(primary_key=True)
+    executive = models.ForeignKey(SupplierExecutive, on_delete=models.CASCADE, related_name='allocations')
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name='executive_allocations')
+    allocated_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = True
+        db_table = 'executive_allocation'
+        unique_together = (('executive', 'company'),)
+
+class SupplierOrder(models.Model):
+    order_id = models.AutoField(primary_key=True)
+    company = models.ForeignKey(Company, on_delete=models.DO_NOTHING, db_column='companyid')
+    supplier = models.ForeignKey(Supplier, on_delete=models.DO_NOTHING, db_column='supplierid')
+    executive = models.ForeignKey(SupplierExecutive, on_delete=models.SET_NULL, blank=True, null=True, related_name='orders_taken')
+    total_amount = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    status = models.CharField(max_length=50, default='Pending') # Pending, Approved, Delivered
+    gps_latitude = models.DecimalField(max_digits=10, decimal_places=7, blank=True, null=True)
+    gps_longitude = models.DecimalField(max_digits=10, decimal_places=7, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = True
+        db_table = 'supplier_order'
+
+class SupplierOrderItem(models.Model):
+    item_id = models.AutoField(primary_key=True)
+    order = models.ForeignKey(SupplierOrder, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Products, on_delete=models.DO_NOTHING, db_column='productid')
+    quantity = models.IntegerField()
+    price_at_order = models.DecimalField(max_digits=18, decimal_places=2)
+
+    class Meta:
+        managed = True
+        db_table = 'supplier_order_item'

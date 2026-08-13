@@ -8,7 +8,13 @@ from .views import (
     admin_user_products, admin_company_products,
     admin_user_customer_supplier_overview,
     register_enduser, login_enduser, login_supplier,
-    search_supplier_globally, search_local_supplier, connect_supplier, supplier_bills, onboard_supplier, supplier_dashboard
+    search_supplier_globally, search_local_supplier, connect_supplier, supplier_bills, onboard_supplier, supplier_dashboard,
+    get_company_conversations, get_enduser_conversations, get_conversation_messages, send_message, send_order_message, delete_message, update_order_status,
+    delete_conversations, get_enduser_orders, get_company_orders,
+    register_supplier_executive, login_supplier_executive,
+    get_supplier_executives, allocate_company_to_executive,
+    get_allocated_companies, place_executive_order, get_supplier_manager_orders,
+    get_connected_companies_for_manager, get_executive_orders
 )
 
 router = DefaultRouter()
@@ -40,4 +46,28 @@ urlpatterns = [
     path('supplier/onboard/', onboard_supplier),
     path('supplier/<int:supplier_user_id>/bills/', supplier_bills),
     path('supplier/<int:supplier_user_id>/dashboard/', supplier_dashboard),
+    
+    # Chat Endpoints
+    path('chat/conversations/delete/', delete_conversations),
+    path('chat/conversations/company/<int:company_id>/', get_company_conversations),
+    path('chat/conversations/enduser/<int:enduser_id>/', get_enduser_conversations),
+    path('chat/<int:conversation_id>/messages/', get_conversation_messages),
+    path('chat/messages/<int:message_id>/delete/', delete_message),
+    path('chat/messages/<int:message_id>/status/', update_order_status),
+    path('chat/send/', send_message),
+    path('chat/send-order/', send_order_message),
+    path('chat/orders/enduser/<int:enduser_id>/', get_enduser_orders),
+    path('chat/orders/company/<int:company_id>/', get_company_orders),
+    
+    # Supplier Executive Endpoints
+    path('supplier/executives/register/', register_supplier_executive),
+    path('supplier/executives/login/', login_supplier_executive),
+    path('supplier/manager/<int:manager_id>/executives/', get_supplier_executives),
+    path('supplier/executives/allocate/', allocate_company_to_executive),
+    path('supplier/executives/<int:executive_id>/companies/', get_allocated_companies),
+    path('supplier/executives/order/', place_executive_order),
+    path('supplier/manager/<int:manager_id>/orders/', get_supplier_executives),
+    path('supplier/manager/<int:manager_id>/orders-list/', get_supplier_manager_orders),
+    path('supplier/manager/<int:manager_id>/connected-companies/', get_connected_companies_for_manager),
+    path('supplier/executives/<int:executive_id>/orders/', get_executive_orders),
 ]

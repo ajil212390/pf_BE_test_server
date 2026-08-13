@@ -21,6 +21,22 @@ class CompanyCategorySerializer(serializers.ModelSerializer):
         model = Companycategory
         fields = '__all__'
 
+from drf_spectacular.utils import extend_schema_serializer, OpenApiExample
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            'Company Example',
+            value={
+                "companyname": "Acme Corp",
+                "companyphonenumber": 9876543210,
+                "companylocation": "New York",
+                "companyaddress": "123 Business St",
+                "categoryid": 1
+            }
+        )
+    ]
+)
 class CompanySerializer(serializers.ModelSerializer):
     class Meta:
         model = Company

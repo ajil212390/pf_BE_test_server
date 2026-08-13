@@ -1,7 +1,7 @@
 from decimal import Decimal
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-from .models import Products, Productcategory, Productunit, Company, Users, Customer, Supplier, CustomerBill, SupplierBill, EndUser, Supplieruser, Companycategory
+from .models import Products, Productcategory, Productunit, Company, Users, Customer, Supplier, CustomerBill, SupplierBill, EndUser, Supplieruser, Companycategory, Conversation, ChatMessage, SupplierExecutive, ExecutiveAllocation, SupplierOrder, SupplierOrderItem
 from .serializers import ProductSerializer, ProductCategorySerializer, ProductUnitSerializer, CompanySerializer, CompanyCategorySerializer
 from django.core.files.storage import default_storage
 import uuid
@@ -12,7 +12,21 @@ import io
 from datetime import datetime, date
 from django.db.models import Q, Sum
 from django.db import transaction
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiTypes, inline_serializer
+from rest_framework import serializers
 
+@extend_schema(
+    request=inline_serializer(
+        name="RegisterEndUserRequest",
+        fields={
+            "endusername": serializers.CharField(),
+            "enduserpassword": serializers.CharField(),
+            "enduseremail": serializers.EmailField(required=False),
+            "enduserphone": serializers.CharField(required=False),
+        }
+    ),
+    responses={201: OpenApiResponse(description="Registration successful"), 400: OpenApiResponse(description="Bad request")}
+)
 @api_view(['POST'])
 def register_enduser(request):
     data = request.data
@@ -35,6 +49,17 @@ def register_enduser(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    request=inline_serializer(
+        name="LoginSupplierRequest",
+        fields={
+            "supplierusername": serializers.CharField(required=False),
+            "supplieruserphone": serializers.CharField(required=False),
+            "supplieruserpassword": serializers.CharField(),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Login successful"), 400: OpenApiResponse(description="Bad request"), 401: OpenApiResponse(description="Unauthorized"), 404: OpenApiResponse(description="Not found")}
+)
 @api_view(['POST'])
 def login_supplier(request):
     data = request.data
@@ -70,6 +95,16 @@ def login_supplier(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    request=inline_serializer(
+        name="LoginEndUserRequest",
+        fields={
+            "endusername": serializers.CharField(),
+            "enduserpassword": serializers.CharField(),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Login successful"), 401: OpenApiResponse(description="Unauthorized"), 404: OpenApiResponse(description="Not found")}
+)
 @api_view(['POST'])
 def login_enduser(request):
     data = request.data
@@ -91,6 +126,19 @@ def login_enduser(request):
     except EndUser.DoesNotExist:
         return Response({'error': 'Username not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+@extend_schema(
+    request=inline_serializer(
+        name="RegisterUserRequest",
+        fields={
+            "companyname": serializers.CharField(required=False),
+            "companyphonenumber": serializers.CharField(required=False),
+            "username": serializers.CharField(),
+            "useremail": serializers.EmailField(required=False),
+            "userpassword": serializers.CharField(),
+        }
+    ),
+    responses={201: OpenApiResponse(description="Registration successful"), 400: OpenApiResponse(description="Bad request")}
+)
 @api_view(['POST'])
 def register_user(request):
     data = request.data
@@ -124,6 +172,16 @@ def register_user(request):
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+@extend_schema(
+    request=inline_serializer(
+        name="LoginUserRequest",
+        fields={
+            "username": serializers.CharField(),
+            "userpassword": serializers.CharField(),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Login successful"), 401: OpenApiResponse(description="Unauthorized"), 404: OpenApiResponse(description="Not found")}
+)
 @api_view(['POST'])
 def login_user(request):
     data = request.data
@@ -148,6 +206,17 @@ def login_user(request):
     except Users.DoesNotExist:
         return Response({'error': 'Username not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+@extend_schema(
+    request=inline_serializer(
+        name="UpdateCompanyRequest",
+        fields={
+            "userid": serializers.IntegerField(),
+            "companyname": serializers.CharField(required=False),
+            "companyphonenumber": serializers.CharField(required=False),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Company updated successfully"), 400: OpenApiResponse(description="Bad request"), 404: OpenApiResponse(description="Not found")}
+)
 @api_view(['POST'])
 def update_company(request):
     data = request.data
@@ -169,6 +238,17 @@ def update_company(request):
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+@extend_schema(
+    request=inline_serializer(
+        name="ChangePasswordRequest",
+        fields={
+            "userid": serializers.IntegerField(),
+            "current_password": serializers.CharField(),
+            "new_password": serializers.CharField(),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Password changed successfully"), 400: OpenApiResponse(description="Bad request"), 404: OpenApiResponse(description="Not found")}
+)
 @api_view(['POST'])
 def change_password(request):
     data = request.data
@@ -830,6 +910,13 @@ class ProductUnitViewSet(viewsets.ModelViewSet):
     queryset = Productunit.objects.all()
     serializer_class = ProductUnitSerializer
 
+@extend_schema(
+    parameters=[
+        OpenApiParameter(name="phone", description="Supplier Phone Number", required=False, type=OpenApiTypes.STR),
+        OpenApiParameter(name="gstn", description="Supplier GST Number", required=False, type=OpenApiTypes.STR),
+    ],
+    responses={200: OpenApiResponse(description="Supplier found"), 404: OpenApiResponse(description="Not found")}
+)
 @api_view(['GET'])
 def search_supplier_globally(request):
     phone = request.GET.get('phone')
@@ -854,6 +941,15 @@ def search_supplier_globally(request):
     
     return Response({'message': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
 
+@extend_schema(
+    parameters=[
+        OpenApiParameter(name="phone", description="Supplier Phone Number", required=False, type=OpenApiTypes.STR),
+        OpenApiParameter(name="gstn", description="Supplier GST Number", required=False, type=OpenApiTypes.STR),
+        OpenApiParameter(name="company_id", description="Company ID", required=False, type=OpenApiTypes.INT),
+        OpenApiParameter(name="user_id", description="User ID", required=False, type=OpenApiTypes.INT),
+    ],
+    responses={200: OpenApiResponse(description="Supplier found"), 404: OpenApiResponse(description="Not found")}
+)
 @api_view(['GET'])
 def search_local_supplier(request):
     phone = request.GET.get('phone')
@@ -878,6 +974,20 @@ def search_local_supplier(request):
     
     return Response({'message': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
 
+@extend_schema(
+    request=inline_serializer(
+        name="ConnectSupplierRequest",
+        fields={
+            "supplieruserid": serializers.IntegerField(required=False),
+            "supplier_user_id": serializers.IntegerField(required=False),
+            "supplier_id": serializers.IntegerField(required=False),
+            "userid": serializers.IntegerField(required=False),
+            "user_id": serializers.IntegerField(required=False),
+            "company_user_id": serializers.IntegerField(required=False),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Supplier connected successfully"), 400: OpenApiResponse(description="Bad request"), 404: OpenApiResponse(description="Not found")}
+)
 @api_view(['POST'])
 def connect_supplier(request):
     data = request.data
@@ -1126,6 +1236,9 @@ def supplier_dashboard(request, supplier_user_id):
             }
         })
 
+    executive_count = SupplierExecutive.objects.filter(manager_id=supplier_user_id).count()
+    field_orders_count = SupplierOrder.objects.filter(executive__manager_id=supplier_user_id).count()
+
     return Response({
         'overview': {
             'total_companies': len(companies_data),
@@ -1135,10 +1248,26 @@ def supplier_dashboard(request, supplier_user_id):
             'total_balance': total_balance,
             'total_debit_notes': total_debit_notes_count,
             'total_debit_amount': total_debit_notes_amount,
+            'executive_count': executive_count,
+            'field_orders_count': field_orders_count,
         },
         'companies': companies_data
     }, status=status.HTTP_200_OK)
 
+@extend_schema(
+    request=inline_serializer(
+        name="OnboardSupplierRequest",
+        fields={
+            "phone": serializers.CharField(required=False),
+            "username": serializers.CharField(required=False),
+            "userid": serializers.IntegerField(required=False),
+            "user_id": serializers.IntegerField(required=False),
+            "companyid": serializers.IntegerField(required=False),
+            "company_id": serializers.IntegerField(required=False),
+        }
+    ),
+    responses={201: OpenApiResponse(description="Supplier onboarded successfully"), 400: OpenApiResponse(description="Bad request"), 404: OpenApiResponse(description="Not found")}
+)
 @api_view(['POST'])
 def onboard_supplier(request):
     data = request.data
@@ -1219,3 +1348,604 @@ def onboard_supplier(request):
         return Response(resp, status=status.HTTP_201_CREATED)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+# ==================== CHAT API VIEWS ====================
+
+@api_view(['GET'])
+def get_company_conversations(request, company_id):
+    try:
+        conversations = Conversation.objects.filter(company_id=company_id).select_related('enduser').order_by('-updated_at')
+        result = []
+        for conv in conversations:
+            last_message = conv.messages.order_by('-timestamp').first()
+            has_unread = conv.messages.filter(sender_type='enduser', is_read=False).exists()
+            result.append({
+                'conversation_id': conv.id,
+                'enduser_id': conv.enduser.endsuerid,
+                'enduser_name': conv.enduser.endusername,
+                'updated_at': conv.updated_at,
+                'last_message': last_message.text_content if last_message else None,
+                'last_message_sender': last_message.sender_type if last_message else None,
+                'is_read': last_message.is_read if last_message else True,
+                'has_unread': has_unread,
+                'has_audio': bool(last_message.audio_file) if last_message else False,
+            })
+        return Response(result)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+def get_enduser_conversations(request, enduser_id):
+    try:
+        conversations = Conversation.objects.filter(enduser_id=enduser_id).select_related('company').order_by('-updated_at')
+        result = []
+        for conv in conversations:
+            last_message = conv.messages.order_by('-timestamp').first()
+            result.append({
+                'conversation_id': conv.id,
+                'company_id': conv.company.companyid,
+                'company_name': conv.company.companyname,
+                'updated_at': conv.updated_at,
+                'last_message': last_message.text_content if last_message else None,
+                'last_message_sender': last_message.sender_type if last_message else None,
+                'is_read': last_message.is_read if last_message else True,
+                'has_audio': bool(last_message.audio_file) if last_message else False,
+            })
+        return Response(result)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+def get_conversation_messages(request, conversation_id):
+    try:
+        sender_type = request.GET.get('sender_type')
+        if sender_type:
+            opposite_sender = 'enduser' if sender_type == 'company' else 'company'
+            ChatMessage.objects.filter(conversation_id=conversation_id, sender_type=opposite_sender, is_read=False).update(is_read=True)
+        messages = ChatMessage.objects.filter(conversation_id=conversation_id).order_by('timestamp')
+        result = []
+        for msg in messages:
+            result.append({
+                'id': msg.id,
+                'sender_type': msg.sender_type,
+                'text_content': msg.text_content,
+                'audio_url': msg.audio_file.url if msg.audio_file else None,
+                'duration': msg.duration,
+                'waveform': msg.waveform,
+                'is_read': msg.is_read,
+                'timestamp': msg.timestamp,
+                'order_status': msg.order_status,
+            })
+        return Response(result)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@extend_schema(
+    request=inline_serializer(
+        name="SendMessageRequest",
+        fields={
+            "company_id": serializers.IntegerField(),
+            "enduser_id": serializers.IntegerField(),
+            "sender_type": serializers.CharField(),
+            "text_content": serializers.CharField(required=False),
+            "audio_file": serializers.FileField(required=False),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Message sent"), 400: OpenApiResponse(description="Bad request")}
+)
+@api_view(['POST'])
+def send_message(request):
+    try:
+        company_id = request.data.get('company_id')
+        enduser_id = request.data.get('enduser_id')
+        sender_type = request.data.get('sender_type')
+        text_content = request.data.get('text_content', '')
+        audio_file = request.FILES.get('audio_file')
+        duration = request.data.get('duration')
+        waveform = request.data.get('waveform')
+
+        conversation, created = Conversation.objects.get_or_create(
+            company_id=company_id,
+            enduser_id=enduser_id
+        )
+
+        msg = ChatMessage.objects.create(
+            conversation=conversation,
+            sender_type=sender_type,
+            text_content=text_content,
+            audio_file=audio_file,
+            duration=int(duration) if duration else None,
+            waveform=waveform
+        )
+
+        conversation.updated_at = msg.timestamp
+        conversation.save()
+
+        return Response({
+            'success': True,
+            'message_id': msg.id,
+            'conversation_id': conversation.id,
+            'timestamp': msg.timestamp,
+            'audio_url': msg.audio_file.url if msg.audio_file else None,
+        })
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@extend_schema(
+    request=inline_serializer(
+        name="SendOrderMessageRequest",
+        fields={
+            "company_id": serializers.IntegerField(),
+            "enduser_id": serializers.IntegerField(),
+            "cart_items": serializers.ListField(
+                child=inline_serializer(
+                    name="CartItem",
+                    fields={
+                        "name": serializers.CharField(),
+                        "qty": serializers.IntegerField(default=1),
+                        "price": serializers.FloatField(required=False),
+                    }
+                )
+            ),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Order sent"), 400: OpenApiResponse(description="Bad request")}
+)
+@api_view(['POST'])
+def send_order_message(request):
+    try:
+        company_id = request.data.get('company_id')
+        enduser_id = request.data.get('enduser_id')
+        cart_items = request.data.get('cart_items', []) # List of dicts {name, qty, price}
+        
+        conversation, created = Conversation.objects.get_or_create(
+            company_id=company_id,
+            enduser_id=enduser_id
+        )
+
+        order_text = "🛍️ New Order\n\n"
+        for item in cart_items:
+            qty = item.get('qty', 1)
+            order_text += f"• {item.get('name')} (x{qty})\n"
+
+        msg = ChatMessage.objects.create(
+            conversation=conversation,
+            sender_type='enduser',
+            text_content=order_text
+        )
+
+        conversation.updated_at = msg.timestamp
+        conversation.save()
+
+        return Response({'success': True, 'message': 'Order sent as chat message.'})
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['DELETE'])
+def delete_message(request, message_id):
+    try:
+        msg = ChatMessage.objects.get(id=message_id)
+        msg.delete()
+        return Response({'success': True, 'message': 'Message deleted completely.'})
+    except ChatMessage.DoesNotExist:
+        return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@extend_schema(
+    request=inline_serializer(
+        name="UpdateOrderStatusRequest",
+        fields={
+            "status": serializers.CharField(),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Order status updated"), 400: OpenApiResponse(description="Bad request"), 404: OpenApiResponse(description="Not found")}
+)
+@api_view(['POST'])
+def update_order_status(request, message_id):
+    try:
+        status_val = request.data.get('status')
+        msg = ChatMessage.objects.get(id=message_id)
+        msg.order_status = status_val
+        msg.save()
+        return Response({'success': True, 'message': f'Order status updated to {status_val}'})
+    except ChatMessage.DoesNotExist:
+        return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@extend_schema(
+    request=inline_serializer(
+        name="DeleteConversationsRequest",
+        fields={
+            "conversation_ids": serializers.ListField(child=serializers.IntegerField()),
+        }
+    ),
+    responses={200: OpenApiResponse(description="Conversations deleted"), 400: OpenApiResponse(description="Bad request")}
+)
+@api_view(['POST'])
+def delete_conversations(request):
+    try:
+        conversation_ids = request.data.get('conversation_ids', [])
+        if not conversation_ids:
+            return Response({'error': 'No conversation IDs provided'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        Conversation.objects.filter(id__in=conversation_ids).delete()
+        return Response({'success': True, 'message': 'Conversations deleted successfully.'})
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+def get_enduser_orders(request, enduser_id):
+    try:
+        messages = ChatMessage.objects.filter(
+            conversation__enduser_id=enduser_id,
+            text_content__startswith='🛍️ New Order'
+        ).select_related('conversation__company').order_by('-timestamp')
+        
+        orders = []
+        for msg in messages:
+            orders.append({
+                'id': msg.id,
+                'company_name': msg.conversation.company.companyname,
+                'text_content': msg.text_content,
+                'timestamp': msg.timestamp,
+                'order_status': msg.order_status,
+                'company_id': msg.conversation.company.companyid,
+            })
+        
+        return Response(orders)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+def get_company_orders(request, company_id):
+    try:
+        messages = ChatMessage.objects.filter(
+            conversation__company_id=company_id,
+            text_content__startswith='🛍️ New Order'
+        ).select_related('conversation__enduser').order_by('-timestamp')
+        
+        orders = []
+        for msg in messages:
+            orders.append({
+                'id': msg.id,
+                'enduser_name': msg.conversation.enduser.username,
+                'text_content': msg.text_content,
+                'timestamp': msg.timestamp,
+                'order_status': msg.order_status,
+                'enduser_id': msg.conversation.enduser.userid,
+            })
+        
+        return Response(orders)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+# ─── SUPPLIER EXECUTIVE ENDPOINTS ──────────────────────────────────────────
+
+@api_view(['POST'])
+def register_supplier_executive(request):
+    data = request.data
+    manager_id = data.get('manager_id')
+    name = data.get('executive_name')
+    username = data.get('executive_username')
+    password = data.get('executive_password')
+    phone = data.get('executive_phone')
+
+    try:
+        manager = Supplieruser.objects.get(supplieruserid=manager_id)
+        
+        if SupplierExecutive.objects.filter(executive_username__iexact=username).exists():
+            return Response({'error': 'Username already taken.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        exec_obj = SupplierExecutive.objects.create(
+            manager=manager,
+            executive_name=name,
+            executive_username=username,
+            executive_password=password,
+            executive_phone=phone
+        )
+        return Response({'message': 'Executive registered successfully', 'executive_id': exec_obj.executiveid}, status=status.HTTP_201_CREATED)
+    except Supplieruser.DoesNotExist:
+        return Response({'error': 'Manager not found.'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+def login_supplier_executive(request):
+    data = request.data
+    username = data.get('username')
+    password = data.get('password')
+
+    try:
+        executive = SupplierExecutive.objects.get(executive_username__iexact=username)
+        if executive.executive_password == password:
+            return Response({
+                'message': 'Login successful',
+                'executive_id': executive.executiveid,
+                'executive_name': executive.executive_name,
+                'manager_id': executive.manager_id,
+            }, status=status.HTTP_200_OK)
+        return Response({'error': 'Incorrect password.'}, status=status.HTTP_401_UNAUTHORIZED)
+    except SupplierExecutive.DoesNotExist:
+        return Response({'error': 'Username not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+@api_view(['GET'])
+def get_supplier_executives(request, manager_id):
+    try:
+        executives = SupplierExecutive.objects.filter(manager_id=manager_id).order_by('-created_at')
+        result = []
+        for ex in executives:
+            alloc_count = ExecutiveAllocation.objects.filter(executive=ex).count()
+            result.append({
+                'executive_id': ex.executiveid,
+                'name': ex.executive_name,
+                'username': ex.executive_username,
+                'phone': ex.executive_phone,
+                'allocated_companies': alloc_count,
+            })
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+def allocate_company_to_executive(request):
+    data = request.data
+    executive_id = data.get('executive_id')
+    company_ids = data.get('company_ids', [])
+
+    try:
+        executive = SupplierExecutive.objects.get(executiveid=executive_id)
+        ExecutiveAllocation.objects.filter(executive=executive).delete()
+        for cid in company_ids:
+            company = Company.objects.get(companyid=cid)
+            ExecutiveAllocation.objects.create(executive=executive, company=company)
+            
+        return Response({'message': 'Companies allocated successfully'}, status=status.HTTP_200_OK)
+    except SupplierExecutive.DoesNotExist:
+        return Response({'error': 'Executive not found.'}, status=status.HTTP_404_NOT_FOUND)
+    except Company.DoesNotExist:
+        return Response({'error': 'One or more companies not found.'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+def get_allocated_companies(request, executive_id):
+    try:
+        allocations = ExecutiveAllocation.objects.filter(executive_id=executive_id).select_related('company')
+        result = []
+        for alloc in allocations:
+            c = alloc.company
+            result.append({
+                'company_id': c.companyid,
+                'company_name': c.companyname,
+                'company_phone': c.companyphonenumber,
+                'address': c.companyaddress,
+                'allocated_at': alloc.allocated_at,
+            })
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+def place_executive_order(request):
+    data = request.data
+    executive_id = data.get('executive_id')
+    company_id = data.get('company_id')
+    supplier_id = data.get('supplier_id')
+    items = data.get('items', [])
+    lat = data.get('latitude')
+    lng = data.get('longitude')
+
+    try:
+        executive = SupplierExecutive.objects.get(executiveid=executive_id)
+        company = Company.objects.get(companyid=company_id)
+
+        supplier = None
+        if executive.manager and executive.manager.supplierid:
+            supplier = executive.manager.supplierid
+        elif supplier_id:
+            supplier = Supplier.objects.filter(supplierid=supplier_id).first()
+
+        if not supplier:
+            supplier = Supplier.objects.first()
+
+        total_amount = sum(float(item.get('price', 0)) * int(item.get('quantity', 0)) for item in items)
+
+        order = SupplierOrder.objects.create(
+            company=company,
+            supplier=supplier,
+            executive=executive,
+            total_amount=total_amount,
+            gps_latitude=lat,
+            gps_longitude=lng
+        )
+
+        for item in items:
+            product_id = item.get('product_id')
+            product = Products.objects.get(productid=product_id)
+            SupplierOrderItem.objects.create(
+                order=order,
+                product=product,
+                quantity=item.get('quantity', 1),
+                price_at_order=item.get('price', 0)
+            )
+
+        return Response({'message': 'Order placed successfully', 'order_id': order.order_id}, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        print("ERROR in place_executive_order:", str(e))
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+import math
+
+def calculate_distance_meters(lat1, lon1, lat2, lon2):
+    try:
+        R = 6371000  # Earth's radius in meters
+        dLat = math.radians(lat2 - lat1)
+        dLon = math.radians(lon2 - lon1)
+        a = (math.sin(dLat / 2) * math.sin(dLat / 2) +
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+             math.sin(dLon / 2) * math.sin(dLon / 2))
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
+    except Exception:
+        return None
+
+def parse_lat_lng(location_str):
+    if not location_str:
+        return None, None
+    try:
+        parts = str(location_str).split(',')
+        if len(parts) >= 2:
+            lat = float(parts[0].strip())
+            lng = float(parts[1].strip())
+            return lat, lng
+    except Exception:
+        pass
+    return None, None
+
+@api_view(['GET'])
+def get_supplier_manager_orders(request, manager_id):
+    try:
+        orders = SupplierOrder.objects.filter(executive__manager_id=manager_id).select_related('company', 'executive').order_by('-created_at')
+        result = []
+        for o in orders:
+            items = SupplierOrderItem.objects.filter(order=o).select_related('product')
+            item_list = []
+            for item in items:
+                item_list.append({
+                    'product_name': item.product.productname,
+                    'quantity': item.quantity,
+                    'price': float(item.price_at_order),
+                })
+
+            exec_lat = float(o.gps_latitude) if o.gps_latitude is not None else None
+            exec_lng = float(o.gps_longitude) if o.gps_longitude is not None else None
+
+            comp_lat, comp_lng = parse_lat_lng(o.company.companylocation)
+
+            is_verified = False
+            distance_meters = None
+
+            if exec_lat is not None and exec_lng is not None:
+                if comp_lat is not None and comp_lng is not None:
+                    dist = calculate_distance_meters(exec_lat, exec_lng, comp_lat, comp_lng)
+                    if dist is not None:
+                        distance_meters = round(dist, 1)
+                        is_verified = bool(dist <= 500.0)
+                else:
+                    # If company coordinates are not explicitly set in DB,
+                    # treat GPS presence as verified (with distance unknown)
+                    is_verified = True
+
+            result.append({
+                'order_id': o.order_id,
+                'company_name': o.company.companyname,
+                'executive_name': o.executive.executive_name if o.executive else 'N/A',
+                'total_amount': float(o.total_amount),
+                'status': o.status,
+                'gps_latitude': exec_lat,
+                'gps_longitude': exec_lng,
+                'company_latitude': comp_lat,
+                'company_longitude': comp_lng,
+                'distance_meters': distance_meters,
+                'is_location_verified': is_verified,
+                'created_at': o.created_at,
+                'items': item_list,
+            })
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+def get_connected_companies_for_manager(request, manager_id):
+    try:
+        supplier_user = Supplieruser.objects.get(supplieruserid=manager_id)
+        suppliers_q = Q()
+        if supplier_user.supplierid_id:
+            suppliers_q |= Q(supplierid=supplier_user.supplierid_id)
+        if supplier_user.supplieruserphone:
+            suppliers_q |= Q(supplierphonenumber=supplier_user.supplieruserphone)
+        if supplier_user.supplierusergstnumber:
+            suppliers_q |= Q(suppliergst=supplier_user.supplierusergstnumber)
+
+        suppliers = Supplier.objects.select_related('companyid').filter(suppliers_q).distinct() if suppliers_q else Supplier.objects.none()
+
+        result = []
+        seen_ids = set()
+        for s in suppliers:
+            c = s.companyid
+            if c and c.companyid not in seen_ids:
+                seen_ids.add(c.companyid)
+                result.append({
+                    'companyid': c.companyid,
+                    'companyname': c.companyname,
+                    'companyphonenumber': c.companyphonenumber,
+                    'companylocation': c.companylocation,
+                    'companyaddress': c.companyaddress,
+                })
+
+        if not result:
+            all_comps = Company.objects.all()
+            for c in all_comps:
+                result.append({
+                    'companyid': c.companyid,
+                    'companyname': c.companyname,
+                    'companyphonenumber': c.companyphonenumber,
+                    'companylocation': c.companylocation,
+                    'companyaddress': c.companyaddress,
+                })
+
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+def get_executive_orders(request, executive_id):
+    try:
+        orders = SupplierOrder.objects.filter(executive_id=executive_id).select_related('company').order_by('-created_at')
+        result = []
+        for o in orders:
+            items = SupplierOrderItem.objects.filter(order=o).select_related('product')
+            item_list = []
+            for item in items:
+                item_list.append({
+                    'product_name': item.product.productname,
+                    'quantity': item.quantity,
+                    'price': float(item.price_at_order),
+                })
+
+            exec_lat = float(o.gps_latitude) if o.gps_latitude is not None else None
+            exec_lng = float(o.gps_longitude) if o.gps_longitude is not None else None
+
+            comp_lat, comp_lng = parse_lat_lng(o.company.companylocation)
+            is_verified = False
+            distance_meters = None
+            if exec_lat is not None and exec_lng is not None:
+                if comp_lat is not None and comp_lng is not None:
+                    dist = calculate_distance_meters(exec_lat, exec_lng, comp_lat, comp_lng)
+                    if dist is not None:
+                        distance_meters = round(dist, 1)
+                        is_verified = bool(dist <= 500.0)
+                else:
+                    is_verified = True
+
+            result.append({
+                'order_id': o.order_id,
+                'company_name': o.company.companyname,
+                'total_amount': float(o.total_amount),
+                'status': o.status,
+                'gps_latitude': exec_lat,
+                'gps_longitude': exec_lng,
+                'distance_meters': distance_meters,
+                'is_location_verified': is_verified,
+                'created_at': o.created_at,
+                'items': item_list,
+            })
+        return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
