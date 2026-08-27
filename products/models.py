@@ -187,9 +187,24 @@ class ChatMessage(models.Model):
         managed = True
         db_table = 'chat_message'
 
+class SupplierManager(models.Model):
+    manager_id = models.AutoField(primary_key=True)
+    supplier_user = models.ForeignKey(Supplieruser, on_delete=models.CASCADE, related_name='managers', db_column='supplier_user_id')
+    manager_name = models.CharField(max_length=100)
+    manager_username = models.CharField(max_length=100, unique=True)
+    manager_password = models.CharField(max_length=100)
+    manager_phone = models.CharField(max_length=20, blank=True, null=True)
+    manager_area = models.CharField(max_length=100, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = True
+        db_table = 'supplier_manager'
+
 class SupplierExecutive(models.Model):
     executiveid = models.AutoField(primary_key=True)
-    manager = models.ForeignKey(Supplieruser, on_delete=models.CASCADE, related_name='executives')
+    manager = models.ForeignKey(SupplierManager, on_delete=models.CASCADE, related_name='executives', db_column='manager_id')
+    supplier_user = models.ForeignKey(Supplieruser, on_delete=models.CASCADE, related_name='executives', db_column='supplier_user_id', null=True, blank=True)
     executive_name = models.CharField(max_length=100)
     executive_username = models.CharField(max_length=100, unique=True)
     executive_password = models.CharField(max_length=100)
@@ -236,3 +251,17 @@ class SupplierOrderItem(models.Model):
     class Meta:
         managed = True
         db_table = 'supplier_order_item'
+
+class SupplierProduct(models.Model):
+    id = models.AutoField(primary_key=True)
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, db_column='companyid')
+    supplier = models.ForeignKey(Supplier, on_delete=models.CASCADE, db_column='supplierid')
+    product = models.ForeignKey(Products, on_delete=models.CASCADE, db_column='productid')
+    supplier_price = models.DecimalField(max_digits=18, decimal_places=2, help_text="Specific price offered by this supplier", null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = True
+        db_table = 'supplier_product'
+        unique_together = (('supplier', 'product'),)

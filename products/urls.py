@@ -14,7 +14,10 @@ from .views import (
     register_supplier_executive, login_supplier_executive,
     get_supplier_executives, allocate_company_to_executive,
     get_allocated_companies, place_executive_order, get_supplier_manager_orders,
-    get_connected_companies_for_manager, get_executive_orders
+    get_connected_companies_for_manager, get_executive_orders,
+    register_supplier_manager, login_supplier_manager,
+    get_supplier_managers, get_manager_dashboard, delete_supplier_manager,
+    get_supplier_products, manage_supplier_products,
 )
 
 router = DefaultRouter()
@@ -46,6 +49,8 @@ urlpatterns = [
     path('supplier/onboard/', onboard_supplier),
     path('supplier/<int:supplier_user_id>/bills/', supplier_bills),
     path('supplier/<int:supplier_user_id>/dashboard/', supplier_dashboard),
+    path('supplier/<int:supplier_id>/products/', get_supplier_products),
+    path('supplier/<int:supplier_id>/products/manage/', manage_supplier_products),
     
     # Chat Endpoints
     path('chat/conversations/delete/', delete_conversations),
@@ -70,4 +75,11 @@ urlpatterns = [
     path('supplier/manager/<int:manager_id>/orders-list/', get_supplier_manager_orders),
     path('supplier/manager/<int:manager_id>/connected-companies/', get_connected_companies_for_manager),
     path('supplier/executives/<int:executive_id>/orders/', get_executive_orders),
+
+    # Supplier Manager Endpoints
+    path('supplier/managers/register/', register_supplier_manager),
+    path('supplier/managers/login/', login_supplier_manager),
+    path('supplier/head/<int:supplier_user_id>/managers/', get_supplier_managers),
+    path('supplier/managers/<int:manager_id>/dashboard/', get_manager_dashboard),
+    path('supplier/managers/<int:manager_id>/delete/', delete_supplier_manager),
 ]
