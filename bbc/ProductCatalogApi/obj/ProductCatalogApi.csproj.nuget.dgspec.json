@@ -50,10 +50,6 @@
               "target": "Package",
               "version": "[33.1.0, )"
             },
-            "ExcelDataReader": {
-              "target": "Package",
-              "version": "[3.9.0, )"
-            },
             "Microsoft.AspNetCore.Mvc.NewtonsoftJson": {
               "target": "Package",
               "version": "[10.0.10, )"

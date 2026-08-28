@@ -14,5 +14,5 @@ services:
 
 databases:
   - name: catalog-db
-    databaseName: mydb
-    user: postgres
+    databaseName: catalog_db
+

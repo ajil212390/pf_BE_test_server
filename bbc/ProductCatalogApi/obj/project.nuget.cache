@@ -1,11 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "rwtrFcL97Qk=",
+  "dgSpecHash": "bIgsD/czNAQ=",
   "success": true,
   "projectFilePath": "D:\\app001\\product_catalog_api\\bbc\\ProductCatalogApi\\ProductCatalogApi.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\AJIL\\.nuget\\packages\\csvhelper\\33.1.0\\csvhelper.33.1.0.nupkg.sha512",
-    "C:\\Users\\AJIL\\.nuget\\packages\\exceldatareader\\3.9.0\\exceldatareader.3.9.0.nupkg.sha512",
     "C:\\Users\\AJIL\\.nuget\\packages\\humanizer.core\\2.14.1\\humanizer.core.2.14.1.nupkg.sha512",
     "C:\\Users\\AJIL\\.nuget\\packages\\microsoft.aspnetcore.jsonpatch\\10.0.10\\microsoft.aspnetcore.jsonpatch.10.0.10.nupkg.sha512",
     "C:\\Users\\AJIL\\.nuget\\packages\\microsoft.aspnetcore.mvc.newtonsoftjson\\10.0.10\\microsoft.aspnetcore.mvc.newtonsoftjson.10.0.10.nupkg.sha512",

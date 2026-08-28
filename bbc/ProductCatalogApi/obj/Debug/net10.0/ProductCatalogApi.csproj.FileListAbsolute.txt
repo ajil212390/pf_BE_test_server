@@ -16,7 +16,6 @@ D:\app001\product_catalog_api\bbc\ProductCatalogApi\bin\Debug\net10.0\ProductCat
 D:\app001\product_catalog_api\bbc\ProductCatalogApi\bin\Debug\net10.0\ProductCatalogApi.dll
 D:\app001\product_catalog_api\bbc\ProductCatalogApi\bin\Debug\net10.0\ProductCatalogApi.pdb
 D:\app001\product_catalog_api\bbc\ProductCatalogApi\bin\Debug\net10.0\CsvHelper.dll
-D:\app001\product_catalog_api\bbc\ProductCatalogApi\bin\Debug\net10.0\ExcelDataReader.dll
 D:\app001\product_catalog_api\bbc\ProductCatalogApi\bin\Debug\net10.0\Microsoft.AspNetCore.JsonPatch.dll
 D:\app001\product_catalog_api\bbc\ProductCatalogApi\bin\Debug\net10.0\Microsoft.AspNetCore.Mvc.NewtonsoftJson.dll
 D:\app001\product_catalog_api\bbc\ProductCatalogApi\bin\Debug\net10.0\Microsoft.AspNetCore.OpenApi.dll

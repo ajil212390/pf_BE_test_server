@@ -9,7 +9,6 @@
       "ProductCatalogApi/1.0.0": {
         "dependencies": {
           "CsvHelper": "33.1.0",
-          "ExcelDataReader": "3.9.0",
           "Microsoft.AspNetCore.Mvc.NewtonsoftJson": "10.0.10",
           "Microsoft.AspNetCore.OpenApi": "10.0.9",
           "Microsoft.EntityFrameworkCore.Design": "10.0.10",
@@ -25,14 +24,6 @@
           "lib/net9.0/CsvHelper.dll": {
             "assemblyVersion": "33.0.0.0",
             "fileVersion": "33.1.0.26"
-          }
-        }
-      },
-      "ExcelDataReader/3.9.0": {
-        "runtime": {
-          "lib/net8.0/ExcelDataReader.dll": {
-            "assemblyVersion": "3.9.0.0",
-            "fileVersion": "3.9.0.0"
           }
         }
       },
@@ -602,13 +593,6 @@
       "sha512": "sha512-kqfTOZGrn7NarNeXgjh86JcpTHUoeQDMB8t9NVa/ZtlSYiV1rxfRnQ49WaJsob4AiGrbK0XDzpyKkBwai4F8eg==",
       "path": "csvhelper/33.1.0",
       "hashPath": "csvhelper.33.1.0.nupkg.sha512"
-    },
-    "ExcelDataReader/3.9.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-3lEkUzG67UWPYj/xlX5Hua3MeQQktnK0B7WGzDjLpdJpBtct7szX0E4WB3Kl6C/8bNnbkyT2eO0FSPV+9CCemw==",
-      "path": "exceldatareader/3.9.0",
-      "hashPath": "exceldatareader.3.9.0.nupkg.sha512"
     },
     "Humanizer.Core/2.14.1": {
       "type": "package",
