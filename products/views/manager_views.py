@@ -1,13 +1,20 @@
-from rest_framework import status
+﻿from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from ..models import SupplierManager, SupplierExecutive, SupplierOrder, ExecutiveAllocation, Supplieruser
+from ..models import (
+    SupplierManager,
+    SupplierExecutive,
+    SupplierOrder,
+    SupplierOrderItem,
+    ExecutiveAllocation,
+    Supplieruser,
+)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 # SUPPLIER MANAGER ENDPOINTS
-# ─────────────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
 
 @api_view(['POST'])
 def register_supplier_manager(request):
@@ -109,7 +116,7 @@ def get_supplier_managers(request, supplier_user_id):
 
 @api_view(['GET'])
 def get_manager_dashboard(request, manager_id):
-    """Get full dashboard data for a Supplier Manager: executives, orders, stats."""
+    """Get full dashboard data for a Supplier Manager: executives, orders with items, stats."""
     try:
         manager = SupplierManager.objects.select_related('supplier_user').get(manager_id=manager_id)
         executives = SupplierExecutive.objects.filter(manager=manager)
@@ -119,8 +126,6 @@ def get_manager_dashboard(request, manager_id):
 
         total_orders = orders.count()
         total_amount = sum(float(o.total_amount) for o in orders)
-        pending_orders = orders.filter(status='Pending').count()
-        delivered_orders = orders.filter(status='Delivered').count()
 
         exec_list = []
         for ex in executives:
@@ -136,14 +141,22 @@ def get_manager_dashboard(request, manager_id):
             })
 
         recent_orders = []
-        for o in orders[:20]:
+        for o in orders[:50]:
+            items = SupplierOrderItem.objects.filter(order=o).select_related('product')
+            item_list = []
+            for item in items:
+                item_list.append({
+                    'product_name': item.product.productname if item.product else 'Product',
+                    'quantity': item.quantity,
+                    'price': float(item.price_at_order),
+                })
             recent_orders.append({
                 'order_id': o.order_id,
-                'company_name': o.company.companyname,
+                'company_name': o.company.companyname if o.company else 'N/A',
                 'executive_name': o.executive.executive_name if o.executive else 'N/A',
                 'total_amount': float(o.total_amount),
-                'status': o.status,
                 'created_at': o.created_at,
+                'items': item_list,
             })
 
         return Response({
@@ -155,8 +168,6 @@ def get_manager_dashboard(request, manager_id):
                 'total_executives': executives.count(),
                 'total_orders': total_orders,
                 'total_amount': total_amount,
-                'pending_orders': pending_orders,
-                'delivered_orders': delivered_orders,
             },
             'executives': exec_list,
             'recent_orders': recent_orders,

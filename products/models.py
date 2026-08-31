@@ -265,3 +265,6 @@ class SupplierProduct(models.Model):
         managed = True
         db_table = 'supplier_product'
         unique_together = (('supplier', 'product'),)
+# class supplierdue(models.Model):
+#     dueid=models.AutoField(primary_key=True)
+    
