@@ -1,3 +1,4 @@
+from ..serializers import CommitmentSerializer
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -6,7 +7,7 @@ from django.db.models import Q
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiTypes, inline_serializer
 from rest_framework import serializers
 
-from ..models import Supplier, Supplieruser, SupplierBill, Company, Users, SupplierOrder, SupplierExecutive
+from ..models import Commitment, Supplier, Supplieruser, SupplierBill, Company, Users, SupplierOrder, SupplierExecutive
 
 
 @extend_schema(
@@ -190,15 +191,27 @@ def supplier_bills(request, supplier_user_id):
     )
 
     try:
+        # Pre-fetch latest commitments for all bills
+        bill_nos = [b.supplierbillno for b in bills if b.supplierbillno]
+        latest_commitments = {}
+        if bill_nos:
+            commits = Commitment.objects.filter(bill_no__in=bill_nos).order_by('created_at')
+            for c in commits:
+                latest_commitments[c.bill_no] = c.new_due_date or (str(c.bill_due_date) if c.bill_due_date else '')
+
         result = []
         for bill in bills:
             company = bill.supplierid.companyid if getattr(bill, 'supplierid', None) else None
+            b_no = bill.supplierbillno or ''
+            due_date = latest_commitments.get(b_no) or (str(bill.supplierbillduedate) if bill.supplierbillduedate else '')
+
             result.append({
                 'id': bill.supplierbillid,
                 'supplier_id': bill.supplierid.supplierid if getattr(bill, 'supplierid', None) else None,
                 'supplier_name': bill.supplierid.suppliername if getattr(bill, 'supplierid', None) else '',
-                'bill_no': bill.supplierbillno or '',
+                'bill_no': b_no,
                 'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+                'due_date': due_date,
                 'amount': float(bill.supplierbillamount or 0),
                 'paid_amount': float(bill.paidamount or 0),
                 'balance': float(bill.balance or 0),
@@ -446,3 +459,75 @@ def onboard_supplier(request):
         return Response(resp, status=status.HTTP_201_CREATED)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET', 'POST'])
+def bill_commitments_view(request, bill_no=None):
+    if request.method == 'POST':
+        data = request.data
+        b_no = data.get('bill_no') or bill_no
+        if not b_no:
+            return Response({'error': 'bill_no is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        new_due = data.get('new_due_date') or ''
+        prev_due = data.get('previous_due_date') or ''
+        try:
+            ext_days = int(data.get('extension_days') or 0)
+        except Exception:
+            ext_days = 0
+        narration = data.get('narration') or ''
+        bill_id = data.get('bill_id')
+        company_id = data.get('company_id')
+        supplier_id = data.get('supplier_id')
+
+        # Automatically resolve missing IDs from existing SupplierBill and Supplier table
+        try:
+            sb = SupplierBill.objects.filter(supplierbillno=b_no).select_related('supplierid').first()
+            if sb:
+                if not bill_id:
+                    bill_id = sb.supplierbillid
+                if not supplier_id and sb.supplierid:
+                    supplier_id = getattr(sb.supplierid, 'supplierid', None)
+                if not company_id and sb.supplierid:
+                    company_id = getattr(sb.supplierid, 'companyid_id', None)
+                    if not company_id and hasattr(sb.supplierid, 'companyid'):
+                        company_id = getattr(sb.supplierid.companyid, 'companyid', None)
+        except Exception:
+            pass
+
+        due_date_val = None
+        try:
+            from datetime import datetime
+            due_date_val = datetime.strptime(new_due.strip(), '%Y-%m-%d').date()
+        except Exception:
+            pass
+
+        commitment = Commitment.objects.create(
+            bill_no=b_no,
+            bill_id=bill_id,
+            company_id=company_id,
+            supplier_id=supplier_id,
+            previous_due_date=prev_due,
+            new_due_date=new_due,
+            bill_due_date=due_date_val,
+            extension_days=ext_days,
+            narration=narration,
+        )
+
+        try:
+            if due_date_val:
+                SupplierBill.objects.filter(supplierbillno=b_no).update(supplierbillduedate=due_date_val)
+        except Exception:
+            pass
+
+        serializer = CommitmentSerializer(commitment)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    elif request.method == 'GET':
+        b_no = bill_no or request.GET.get('bill_no')
+        if not b_no:
+            return Response({'error': 'bill_no is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        commitments = Commitment.objects.filter(bill_no=b_no).order_by('-created_at')
+        serializer = CommitmentSerializer(commitments, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)

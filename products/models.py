@@ -265,6 +265,20 @@ class SupplierProduct(models.Model):
         managed = True
         db_table = 'supplier_product'
         unique_together = (('supplier', 'product'),)
-# class supplierdue(models.Model):
-#     dueid=models.AutoField(primary_key=True)
-    
+class Commitment(models.Model):
+    commitment_id = models.AutoField(primary_key=True)
+    bill_no = models.CharField(max_length=100, db_index=True)
+    bill_id = models.IntegerField(null=True, blank=True, db_column='supplierbillid')
+    company_id = models.IntegerField(null=True, blank=True)
+    supplier_id = models.IntegerField(null=True, blank=True)
+    previous_due_date = models.CharField(max_length=50, blank=True, default='')
+    new_due_date = models.CharField(max_length=50, blank=True, default='')
+    bill_due_date = models.DateField(null=True, blank=True)
+    extension_days = models.IntegerField(default=0)
+    narration = models.CharField(max_length=500, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'commitment'
+        managed = True

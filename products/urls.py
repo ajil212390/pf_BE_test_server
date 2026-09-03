@@ -1,3 +1,4 @@
+from .views.supplier_views import bill_commitments_view
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
@@ -82,4 +83,8 @@ urlpatterns = [
     path('supplier/head/<int:supplier_user_id>/managers/', get_supplier_managers),
     path('supplier/managers/<int:manager_id>/dashboard/', get_manager_dashboard),
     path('supplier/managers/<int:manager_id>/delete/', delete_supplier_manager),
+    # Bill Commitment Endpoints
+    path('supplier/bills/commitments/', bill_commitments_view),
+    path('supplier/bills/<str:bill_no>/commitments/', bill_commitments_view),
+    path('commitments/', bill_commitments_view),
 ]

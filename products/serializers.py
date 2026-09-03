@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Products, Productcategory, Productunit, Company, Companycategory
+from .models import Commitment, Products, Productcategory, Productunit, Company, Companycategory
 from .models import EndUser  # add EndUser to the existing import line
 
 class EndUserSerializer(serializers.ModelSerializer):
@@ -67,3 +67,24 @@ class ProductSerializer(serializers.ModelSerializer):
                 urls.append(request.build_absolute_uri(f"{settings.MEDIA_URL}{path}"))
             return urls
         return []
+
+
+class CommitmentSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(source='commitment_id', read_only=True)
+
+    class Meta:
+        model = Commitment
+        fields = [
+            'id',
+            'commitment_id',
+            'bill_no',
+            'bill_id',
+            'company_id',
+            'supplier_id',
+            'previous_due_date',
+            'new_due_date',
+            'extension_days',
+            'narration',
+            'created_at',
+            'updated_at',
+        ]
