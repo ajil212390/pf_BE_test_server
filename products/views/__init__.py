@@ -48,7 +48,9 @@ from .supplier_product_views import (
 
 from .chat_views import (
     get_company_conversations,
+    get_company_executive_conversations,
     get_enduser_conversations,
+    get_executive_conversations,
     get_conversation_messages,
     send_message,
     send_order_message,
@@ -69,6 +71,7 @@ from .executive_views import (
     get_supplier_manager_orders,
     get_connected_companies_for_manager,
     get_executive_orders,
+    delete_supplier_executive,
 )
 
 from .manager_views import (
@@ -95,13 +98,13 @@ __all__ = [
     'supplier_bills', 'supplier_dashboard', 'onboard_supplier',
     'get_supplier_products', 'manage_supplier_products',
     # chat
-    'get_company_conversations', 'get_enduser_conversations', 'get_conversation_messages',
+    'get_company_conversations', 'get_company_executive_conversations', 'get_enduser_conversations', 'get_executive_conversations', 'get_conversation_messages',
     'send_message', 'send_order_message', 'delete_message', 'update_order_status',
     'delete_conversations', 'get_enduser_orders', 'get_company_orders',
     # executive
     'register_supplier_executive', 'login_supplier_executive', 'get_supplier_executives',
     'allocate_company_to_executive', 'get_allocated_companies', 'place_executive_order',
-    'get_supplier_manager_orders', 'get_connected_companies_for_manager', 'get_executive_orders',
+    'get_supplier_manager_orders', 'get_connected_companies_for_manager', 'get_executive_orders', 'delete_supplier_executive',
     # manager
     'register_supplier_manager', 'login_supplier_manager', 'get_supplier_managers',
     'get_manager_dashboard', 'delete_supplier_manager',

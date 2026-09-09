@@ -82,6 +82,7 @@ def login_supplier(request):
                 'supplieruserphone': supplier_user.supplieruserphone or '',
                 'supplierusergstnumber': supplier_user.supplierusergstnumber or '',
                 'supplieruseraddress': supplier_user.supplieruseraddress or '',
+                'location_coordinates': getattr(supplier_user, 'location_coordinates', None),
             }, status=status.HTTP_200_OK)
         return Response({'error': 'Incorrect password.'}, status=status.HTTP_401_UNAUTHORIZED)
     except Exception as e:

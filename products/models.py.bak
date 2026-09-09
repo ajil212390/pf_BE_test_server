@@ -96,7 +96,6 @@ class Supplier(models.Model):
     supplierstate = models.CharField(max_length=100, blank=True, null=True)
     supplierpanno = models.CharField(max_length=20, blank=True, null=True)
     companyid = models.ForeignKey(Company, models.DO_NOTHING, db_column='companyid')
-    location_coordinates = models.CharField(max_length=255, blank=True, null=True, db_column='location_coordinates')
 
     class Meta:
         managed = False
@@ -148,14 +147,13 @@ class EndUser(models.Model):
 class Supplieruser(models.Model):
     supplieruserid = models.AutoField(primary_key=True)
     supplierid = models.ForeignKey(Supplier, models.DO_NOTHING, db_column='supplierid', blank=True, null=True)
-    suppliername = models.CharField(max_length=200, blank=True, null=True)
+    suppliername = models.CharField(max_length=25, blank=True, null=True)
     supplierusername = models.CharField(max_length=25, blank=True, null=True)
     supplieruserphone = models.CharField(max_length=20, blank=True, null=True)
     supplieruseremail = models.CharField(max_length=30, blank=True, null=True)
     supplierusergstnumber = models.CharField(max_length=50, blank=True, null=True)
     supplieruseraddress = models.CharField(max_length=100, blank=True, null=True)
     supplieruserpassword = models.CharField(max_length=100, blank=True, null=True)
-    location_coordinates = models.CharField(max_length=255, blank=True, null=True, db_column='location_coordinates')
 
     class Meta:
         managed = False
@@ -164,15 +162,14 @@ class Supplieruser(models.Model):
 class Conversation(models.Model):
     id = models.AutoField(primary_key=True)
     company = models.ForeignKey(Company, models.DO_NOTHING, db_column='companyid')
-    enduser = models.ForeignKey(EndUser, models.DO_NOTHING, db_column='endsuerid', null=True, blank=True)
-    executive = models.ForeignKey('SupplierExecutive', models.DO_NOTHING, db_column='executiveid', null=True, blank=True)
-    conversation_type = models.CharField(max_length=20, default='customer')
+    enduser = models.ForeignKey(EndUser, models.DO_NOTHING, db_column='endsuerid')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         managed = True
-        db_table = 'conversation' 
+        db_table = 'conversation'
+        unique_together = (('company', 'enduser'),)
 
 class ChatMessage(models.Model):
     id = models.AutoField(primary_key=True)
@@ -180,7 +177,6 @@ class ChatMessage(models.Model):
     sender_type = models.CharField(max_length=20) # 'company' or 'enduser'
     text_content = models.TextField(blank=True, null=True)
     audio_file = models.FileField(upload_to='chat_audio/', blank=True, null=True)
-    image_file = models.ImageField(upload_to='chat_images/', blank=True, null=True)
     duration = models.IntegerField(blank=True, null=True, help_text="Duration in seconds")
     waveform = models.TextField(blank=True, null=True, help_text="JSON list of waveform floats")
     is_read = models.BooleanField(default=False)
@@ -249,7 +245,6 @@ class SupplierOrderItem(models.Model):
     item_id = models.AutoField(primary_key=True)
     order = models.ForeignKey(SupplierOrder, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Products, on_delete=models.DO_NOTHING, db_column='productid')
-    supplier_product = models.ForeignKey('SupplierProduct', on_delete=models.SET_NULL, null=True, blank=True, db_column='supplierproductid')
     quantity = models.IntegerField()
     price_at_order = models.DecimalField(max_digits=18, decimal_places=2)
 

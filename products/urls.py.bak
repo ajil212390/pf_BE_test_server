@@ -10,7 +10,7 @@ from .views import (
     admin_user_customer_supplier_overview,
     register_enduser, login_enduser, login_supplier,
     search_supplier_globally, search_local_supplier, connect_supplier, supplier_bills, onboard_supplier, supplier_dashboard,
-    get_company_conversations, get_company_executive_conversations, get_enduser_conversations, get_executive_conversations, get_conversation_messages, send_message, send_order_message, delete_message, update_order_status,
+    get_company_conversations, get_enduser_conversations, get_conversation_messages, send_message, send_order_message, delete_message, update_order_status,
     delete_conversations, get_enduser_orders, get_company_orders,
     register_supplier_executive, login_supplier_executive,
     get_supplier_executives, allocate_company_to_executive,
@@ -18,7 +18,6 @@ from .views import (
     get_connected_companies_for_manager, get_executive_orders,
     register_supplier_manager, login_supplier_manager,
     get_supplier_managers, get_manager_dashboard, delete_supplier_manager,
-    delete_supplier_executive,
     get_supplier_products, manage_supplier_products,
 )
 
@@ -57,9 +56,7 @@ urlpatterns = [
     # Chat Endpoints
     path('chat/conversations/delete/', delete_conversations),
     path('chat/conversations/company/<int:company_id>/', get_company_conversations),
-    path('chat/conversations/company/<int:company_id>/executives/', get_company_executive_conversations),
     path('chat/conversations/enduser/<int:enduser_id>/', get_enduser_conversations),
-    path('chat/conversations/executive/<int:executive_id>/', get_executive_conversations),
     path('chat/<int:conversation_id>/messages/', get_conversation_messages),
     path('chat/messages/<int:message_id>/delete/', delete_message),
     path('chat/messages/<int:message_id>/status/', update_order_status),
@@ -79,7 +76,6 @@ urlpatterns = [
     path('supplier/manager/<int:manager_id>/orders-list/', get_supplier_manager_orders),
     path('supplier/manager/<int:manager_id>/connected-companies/', get_connected_companies_for_manager),
     path('supplier/executives/<int:executive_id>/orders/', get_executive_orders),
-    path('supplier/executives/<int:executive_id>/delete/', delete_supplier_executive),
 
     # Supplier Manager Endpoints
     path('supplier/managers/register/', register_supplier_manager),

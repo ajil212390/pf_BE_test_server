@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from ..models import (
+    SupplierProduct,
     Company, Supplier, Supplieruser, SupplierBill,
     SupplierExecutive, SupplierManager, ExecutiveAllocation,
     SupplierOrder, SupplierOrderItem, Products, Users,
@@ -93,6 +94,7 @@ def login_supplier_executive(request):
                 'manager_id': executive.manager_id,
                 'manager_name': executive.manager.manager_name,
                 'supplier_user_id': executive.manager.supplier_user_id,
+                'supplier_id': executive.manager.supplier_user.supplierid_id if (executive.manager and executive.manager.supplier_user) else None,
             }, status=status.HTTP_200_OK)
         return Response({'error': 'Incorrect password.'}, status=status.HTTP_401_UNAUTHORIZED)
     except SupplierExecutive.DoesNotExist:
@@ -143,16 +145,46 @@ def allocate_company_to_executive(request):
 @api_view(['GET'])
 def get_allocated_companies(request, executive_id):
     try:
+        executive = SupplierExecutive.objects.select_related('manager', 'supplier_user').filter(executiveid=executive_id).first()
+        if not executive:
+            return Response({'error': 'Executive not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        supp_user = executive.supplier_user or (executive.manager.supplier_user if executive.manager else None)
+
         allocations = ExecutiveAllocation.objects.filter(executive_id=executive_id).select_related('company')
         result = []
         for alloc in allocations:
             c = alloc.company
+            local_supp = None
+            if supp_user:
+                supp_q = Q(companyid=c.companyid)
+                filter_q = Q(supplierphonenumber=supp_user.supplieruserphone)
+                if getattr(supp_user, 'supplierusergst', None):
+                    filter_q |= Q(suppliergst=supp_user.supplierusergst)
+                if getattr(supp_user, 'supplierusergstnumber', None):
+                    filter_q |= Q(suppliergst=supp_user.supplierusergstnumber)
+                if supp_user.supplierusername:
+                    filter_q |= Q(suppliername__iexact=supp_user.supplierusername)
+                local_supp = Supplier.objects.filter(supp_q & filter_q).first()
+
+                if not local_supp:
+                    # Auto-link local supplier for this allocated company
+                    local_supp = Supplier.objects.create(
+                        companyid=c,
+                        suppliername=supp_user.supplierusername,
+                        supplierphonenumber=supp_user.supplieruserphone,
+                        suppliergst=getattr(supp_user, 'supplierusergst', '') or getattr(supp_user, 'supplierusergstnumber', '') or '',
+                        supplieraddress=getattr(supp_user, 'supplieruseraddress', '') or '',
+                    )
+
             result.append({
                 'company_id': c.companyid,
                 'company_name': c.companyname,
                 'company_phone': c.companyphonenumber,
                 'address': c.companyaddress,
                 'allocated_at': alloc.allocated_at,
+                'supplier_id': local_supp.supplierid if local_supp else None,
+                'supplier_name': local_supp.suppliername if local_supp else (supp_user.supplierusername if supp_user else None),
             })
         return Response(result, status=status.HTTP_200_OK)
     except Exception as e:
@@ -170,15 +202,42 @@ def place_executive_order(request):
     lng = data.get('longitude')
 
     try:
-        executive = SupplierExecutive.objects.get(executiveid=executive_id)
+        executive = SupplierExecutive.objects.select_related('manager', 'supplier_user').get(executiveid=executive_id)
         company = Company.objects.get(companyid=company_id)
 
+        # 1. Validate allocation
+        if not ExecutiveAllocation.objects.filter(executive=executive, company=company).exists():
+            return Response({'error': 'Company is not allocated to this executive.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # 2. Resolve Supplier strictly for THIS company
+        supp_user = executive.supplier_user or (executive.manager.supplier_user if executive.manager else None)
         supplier = None
-        if executive.manager and executive.manager.supplier_user:
-            supplier = Supplier.objects.filter(supplierphonenumber=executive.manager.supplier_user.supplieruserphone).first()
+
+        if supplier_id:
+            supplier = Supplier.objects.filter(supplierid=supplier_id, companyid=company).first()
+
+        if not supplier and supp_user:
+            supp_q = Q(companyid=company)
+            filter_q = Q(supplierphonenumber=supp_user.supplieruserphone)
+            if getattr(supp_user, 'supplierusergst', None):
+                filter_q |= Q(suppliergst=supp_user.supplierusergst)
+            if getattr(supp_user, 'supplierusergstnumber', None):
+                filter_q |= Q(suppliergst=supp_user.supplierusergstnumber)
+            if supp_user.supplierusername:
+                filter_q |= Q(suppliername__iexact=supp_user.supplierusername)
+            supplier = Supplier.objects.filter(supp_q & filter_q).first()
+
+        if not supplier and supp_user:
+            supplier = Supplier.objects.create(
+                companyid=company,
+                suppliername=supp_user.supplierusername,
+                supplierphonenumber=supp_user.supplieruserphone,
+                suppliergst=getattr(supp_user, 'supplierusergst', '') or getattr(supp_user, 'supplierusergstnumber', '') or '',
+                supplieraddress=getattr(supp_user, 'supplieruseraddress', '') or '',
+            )
 
         if not supplier:
-            supplier = Supplier.objects.first()
+            return Response({'error': 'Unable to resolve supplier for this company.'}, status=status.HTTP_400_BAD_REQUEST)
 
         total_amount = sum(float(item.get('price', 0)) * int(item.get('quantity', 0)) for item in items)
 
@@ -192,16 +251,43 @@ def place_executive_order(request):
         )
 
         for item in items:
-            product_id = item.get('product_id')
+            product_id = item.get('product_id') or item.get('productid')
+            sp_id = item.get('supplier_product_id') or item.get('supplierproductid')
             product = Products.objects.get(productid=product_id)
+
+            supplier_product = None
+            if sp_id:
+                supplier_product = SupplierProduct.objects.filter(id=sp_id).first()
+            if not supplier_product:
+                supplier_product = SupplierProduct.objects.filter(
+                    supplier=supplier,
+                    company=company,
+                    product=product
+                ).first()
+
             SupplierOrderItem.objects.create(
                 order=order,
                 product=product,
+                supplier_product=supplier_product,
                 quantity=item.get('quantity', 1),
                 price_at_order=item.get('price', 0)
             )
 
-        return Response({'message': 'Order placed successfully', 'order_id': order.order_id}, status=status.HTTP_201_CREATED)
+        return Response({
+            'message': 'Order placed successfully',
+            'order_id': order.order_id,
+            'company_id': company.companyid,
+            'company_name': company.companyname,
+            'supplier_id': supplier.supplierid,
+            'supplier_name': supplier.suppliername,
+            'executive_id': executive.executiveid,
+            'executive_name': executive.executive_name,
+            'total_amount': float(order.total_amount),
+        }, status=status.HTTP_201_CREATED)
+    except SupplierExecutive.DoesNotExist:
+        return Response({'error': 'Executive not found.'}, status=status.HTTP_404_NOT_FOUND)
+    except Company.DoesNotExist:
+        return Response({'error': 'Company not found.'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         print("ERROR in place_executive_order:", str(e))
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -210,14 +296,17 @@ def place_executive_order(request):
 @api_view(['GET'])
 def get_supplier_manager_orders(request, manager_id):
     try:
-        orders = SupplierOrder.objects.filter(executive__manager_id=manager_id).select_related('company', 'executive').order_by('-created_at')
+        orders = SupplierOrder.objects.filter(executive__manager_id=manager_id).select_related('company', 'executive', 'supplier').order_by('-created_at')
         result = []
         for o in orders:
-            items = SupplierOrderItem.objects.filter(order=o).select_related('product')
+            items = SupplierOrderItem.objects.filter(order=o).select_related('product', 'supplier_product')
             item_list = []
             for item in items:
                 item_list.append({
-                    'product_name': item.product.productname,
+                    'item_id': item.item_id,
+                    'product_id': item.product_id,
+                    'supplier_product_id': item.supplier_product_id,
+                    'product_name': item.product.productname if item.product else 'N/A',
                     'quantity': item.quantity,
                     'price': float(item.price_at_order),
                 })
@@ -241,7 +330,11 @@ def get_supplier_manager_orders(request, manager_id):
 
             result.append({
                 'order_id': o.order_id,
-                'company_name': o.company.companyname,
+                'company_id': o.company_id,
+                'company_name': o.company.companyname if o.company else 'N/A',
+                'supplier_id': o.supplier_id,
+                'supplier_name': o.supplier.suppliername if o.supplier else 'N/A',
+                'executive_id': o.executive_id,
                 'executive_name': o.executive.executive_name if o.executive else 'N/A',
                 'total_amount': float(o.total_amount),
                 'status': o.status,
@@ -288,16 +381,7 @@ def get_connected_companies_for_manager(request, manager_id):
                     'companyaddress': c.companyaddress,
                 })
 
-        if not result:
-            all_comps = Company.objects.all()
-            for c in all_comps:
-                result.append({
-                    'companyid': c.companyid,
-                    'companyname': c.companyname,
-                    'companyphonenumber': c.companyphonenumber,
-                    'companylocation': c.companylocation,
-                    'companyaddress': c.companyaddress,
-                })
+
 
         return Response(result, status=status.HTTP_200_OK)
     except Exception as e:
@@ -307,14 +391,17 @@ def get_connected_companies_for_manager(request, manager_id):
 @api_view(['GET'])
 def get_executive_orders(request, executive_id):
     try:
-        orders = SupplierOrder.objects.filter(executive_id=executive_id).select_related('company').order_by('-created_at')
+        orders = SupplierOrder.objects.filter(executive_id=executive_id).select_related('company', 'supplier').order_by('-created_at')
         result = []
         for o in orders:
-            items = SupplierOrderItem.objects.filter(order=o).select_related('product')
+            items = SupplierOrderItem.objects.filter(order=o).select_related('product', 'supplier_product')
             item_list = []
             for item in items:
                 item_list.append({
-                    'product_name': item.product.productname,
+                    'item_id': item.item_id,
+                    'product_id': item.product_id,
+                    'supplier_product_id': item.supplier_product_id,
+                    'product_name': item.product.productname if item.product else 'N/A',
                     'quantity': item.quantity,
                     'price': float(item.price_at_order),
                 })
@@ -336,7 +423,10 @@ def get_executive_orders(request, executive_id):
 
             result.append({
                 'order_id': o.order_id,
-                'company_name': o.company.companyname,
+                'company_id': o.company_id,
+                'company_name': o.company.companyname if o.company else 'N/A',
+                'supplier_id': o.supplier_id,
+                'supplier_name': o.supplier.suppliername if o.supplier else 'N/A',
                 'total_amount': float(o.total_amount),
                 'status': o.status,
                 'gps_latitude': exec_lat,
@@ -347,5 +437,21 @@ def get_executive_orders(request, executive_id):
                 'items': item_list,
             })
         return Response(result, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+
+@api_view(['DELETE', 'POST'])
+def delete_supplier_executive(request, executive_id):
+    """Delete a Supplier Executive and clean up their allocations."""
+    try:
+        executive = SupplierExecutive.objects.get(executiveid=executive_id)
+        ExecutiveAllocation.objects.filter(executive=executive).delete()
+        executive.delete()
+        return Response({'message': 'Executive deleted successfully.'}, status=status.HTTP_200_OK)
+    except SupplierExecutive.DoesNotExist:
+        return Response({'error': 'Executive not found.'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

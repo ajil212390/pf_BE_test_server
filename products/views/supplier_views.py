@@ -37,6 +37,7 @@ def search_supplier_globally(request):
             'gst_number': supplier.supplierusergstnumber,
             'email': supplier.supplieruseremail,
             'address': supplier.supplieruseraddress,
+            'location_coordinates': getattr(supplier, 'location_coordinates', None),
         }, status=status.HTTP_200_OK)
 
     return Response({'message': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -71,6 +72,7 @@ def search_local_supplier(request):
             'email': supplier.supplieremail,
             'address': supplier.supplieraddress,
             'isconnected': bool(supplier.isconnected),
+            'location_coordinates': getattr(supplier, 'location_coordinates', None),
         }, status=status.HTTP_200_OK)
 
     return Response({'message': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -104,12 +106,13 @@ def connect_supplier(request):
     except Supplieruser.DoesNotExist:
         return Response({'error': 'Supplier user not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+    company = None
     try:
         company_user = Users.objects.select_related('companyid').get(userid=company_user_id)
+        company = company_user.companyid
     except Users.DoesNotExist:
-        return Response({'error': 'Company user not found.'}, status=status.HTTP_404_NOT_FOUND)
+        company = Company.objects.filter(companyid=company_user_id).first()
 
-    company = company_user.companyid
     if company is None:
         return Response({'error': 'Company not found for this user.'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -130,7 +133,8 @@ def connect_supplier(request):
             supplieremail=supplier_user.supplieruseremail,
             suppliergst=gst,
             isconnected=1,
-            companyid=company
+            companyid=company,
+            location_coordinates=getattr(supplier_user, 'location_coordinates', None)
         )
     else:
         updated = False
@@ -148,6 +152,10 @@ def connect_supplier(request):
             updated = True
         if supplier_user.supplierusergstnumber and supplier_user.supplierusergstnumber != local_supplier.suppliergst:
             local_supplier.suppliergst = supplier_user.supplierusergstnumber
+            updated = True
+        su_coords = getattr(supplier_user, 'location_coordinates', None)
+        if su_coords and getattr(local_supplier, 'location_coordinates', None) != su_coords:
+            local_supplier.location_coordinates = su_coords
             updated = True
         if updated:
             local_supplier.save()
@@ -395,12 +403,13 @@ def onboard_supplier(request):
                 user_obj = Users.objects.select_related('companyid').get(userid=user_id)
                 company = user_obj.companyid
             except Users.DoesNotExist:
-                company = None
+                company = Company.objects.filter(companyid=user_id).first()
         elif company_id:
             try:
                 company = Company.objects.get(companyid=company_id)
             except Company.DoesNotExist:
-                company = None
+                user_obj = Users.objects.filter(userid=company_id).select_related('companyid').first()
+                company = user_obj.companyid if user_obj else None
 
         with transaction.atomic():
             if phone and Supplieruser.objects.filter(supplieruserphone=phone).exists():
@@ -410,13 +419,14 @@ def onboard_supplier(request):
                 return Response({'error': 'Username already taken'}, status=status.HTTP_400_BAD_REQUEST)
 
             supplier_user = Supplieruser.objects.create(
-                suppliername=data.get('name'),
+                suppliername=data.get('suppliername') or data.get('name'),
                 supplierusername=username,
                 supplieruserpassword=data.get('password'),
                 supplieruserphone=phone,
                 supplieruseremail=data.get('email'),
                 supplierusergstnumber=data.get('gst_number'),
-                supplieruseraddress=data.get('address')
+                supplieruseraddress=data.get('address'),
+                location_coordinates=data.get('location_coordinates')
             )
 
             # If company context is provided, ensure a local Supplier entry exists for that company
@@ -435,7 +445,8 @@ def onboard_supplier(request):
                         supplieremail=data.get('email'),
                         suppliergst=gst,
                         isconnected=1,
-                        companyid=company
+                        companyid=company,
+                        location_coordinates=data.get('location_coordinates')
                     )
                 else:
                     # Mark existing local supplier as connected
@@ -450,6 +461,7 @@ def onboard_supplier(request):
             'success': True,
             'id': supplier_user.supplieruserid,
             'supplier_user_id': supplier_user.supplieruserid,
+            'supplierid': supplier_user.supplierid_id,
             'supplier_id': supplier_user.supplierid_id,
             'username': supplier_user.supplierusername,
             'password': supplier_user.supplieruserpassword or '',
