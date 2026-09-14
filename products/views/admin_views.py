@@ -62,7 +62,42 @@ def _is_note_entry(entry_type):
     if not entry_type:
         return False
     normalized = str(entry_type).strip().lower()
-    return any(marker in normalized for marker in ['return', 'credit', 'debit', 'note'])
+    return any(marker in normalized for marker in ['return', 'credit', 'debit', 'note', 'rtn'])
+
+
+def _is_payment_entry(entry_type, bill_no=''):
+    if entry_type:
+        normalized = str(entry_type).strip().lower()
+        if any(marker in normalized for marker in ['receipt', 'payment', 'rcpt', 'pay']):
+            return True
+    if bill_no:
+        bn = str(bill_no).strip().lower()
+        if bn.startswith('rcpt') or bn.startswith('pay') or 'rcpt-' in bn or 'pay-' in bn:
+            return True
+    return False
+
+
+def _allocate_payments_to_bills(regular_bills, payment_bills):
+    bill_payments_map = {b.pk: [] for b in regular_bills}
+    sorted_bills = sorted(regular_bills, key=lambda b: (getattr(b, 'customerbilldate', None) or getattr(b, 'supplierbilldate', None), b.pk))
+    sorted_payments = sorted(payment_bills, key=lambda p: (getattr(p, 'customerbilldate', None) or getattr(p, 'supplierbilldate', None), p.pk))
+    
+    bill_idx = 0
+    cur_bill_capacity = float(getattr(sorted_bills[0], 'customerbillamount', None) or getattr(sorted_bills[0], 'supplierbillamount', None)) if sorted_bills else 0
+    cur_bill_allocated = 0.0
+    
+    for p in sorted_payments:
+        p_amt = float(getattr(p, 'customerbillamount', None) or getattr(p, 'supplierbillamount', None) or 0)
+        while bill_idx < len(sorted_bills) - 1 and cur_bill_allocated + p_amt > cur_bill_capacity + 0.01:
+            bill_idx += 1
+            cur_bill_capacity = float(getattr(sorted_bills[bill_idx], 'customerbillamount', None) or getattr(sorted_bills[bill_idx], 'supplierbillamount', None))
+            cur_bill_allocated = 0.0
+        
+        if bill_idx < len(sorted_bills):
+            bill_payments_map[sorted_bills[bill_idx].pk].append(p)
+            cur_bill_allocated += p_amt
+            
+    return bill_payments_map
 
 
 # ─── Admin view functions ────────────────────────────────────────────────────
@@ -218,65 +253,73 @@ def admin_user_customer_supplier_overview(request, user_id):
     customer_bills = CustomerBill.objects.filter(customerid__companyid=company)
     supplier_bills = SupplierBill.objects.filter(supplierid__companyid=company)
 
-    customer_note_bills = []
+    # 1. Categorize customer bills
     customer_regular_bills = []
+    customer_note_bills = []
+    customer_payment_bills = []
     for bill in customer_bills:
-        if _is_note_entry(getattr(bill, 'customerbilltype', None)):
+        b_type = getattr(bill, 'customerbilltype', None)
+        b_no = getattr(bill, 'customerbillno', '')
+        if _is_note_entry(b_type):
             customer_note_bills.append(bill)
+        elif _is_payment_entry(b_type, b_no):
+            customer_payment_bills.append(bill)
         else:
             customer_regular_bills.append(bill)
 
-    supplier_note_bills = []
+    # 2. Categorize supplier bills
     supplier_regular_bills = []
+    supplier_note_bills = []
+    supplier_payment_bills = []
     for bill in supplier_bills:
-        if _is_note_entry(getattr(bill, 'supplierbilltype', None)):
+        b_type = getattr(bill, 'supplierbilltype', None)
+        b_no = getattr(bill, 'supplierbillno', '')
+        if _is_note_entry(b_type):
             supplier_note_bills.append(bill)
+        elif _is_payment_entry(b_type, b_no):
+            supplier_payment_bills.append(bill)
         else:
             supplier_regular_bills.append(bill)
 
-    customer_regular_bill_ids = [bill.customerbillid for bill in customer_regular_bills]
-    customer_note_bill_ids = [bill.customerbillid for bill in customer_note_bills]
-    supplier_regular_bill_ids = [bill.supplierbillid for bill in supplier_regular_bills]
-    supplier_note_bill_ids = [bill.supplierbillid for bill in supplier_note_bills]
-
-    customer_regular_bills_qs = customer_bills.filter(customerbillid__in=customer_regular_bill_ids)
-    customer_note_bills_qs = customer_bills.filter(customerbillid__in=customer_note_bill_ids)
-    supplier_regular_bills_qs = supplier_bills.filter(supplierbillid__in=supplier_regular_bill_ids)
-    supplier_note_bills_qs = supplier_bills.filter(supplierbillid__in=supplier_note_bill_ids)
-
-    customer_bills_amount = customer_regular_bills_qs.aggregate(total=Sum('customerbillamount'))['total'] or Decimal('0.00')
-    customer_paid_amount = customer_regular_bills_qs.aggregate(total=Sum('paidamount'))['total'] or Decimal('0.00')
-    customer_balance_amount = customer_regular_bills_qs.aggregate(total=Sum('balance'))['total'] or Decimal('0.00')
-    customer_notes_amount = customer_note_bills_qs.aggregate(total=Sum('customerbillamount'))['total'] or Decimal('0.00')
-    customer_outstanding_amount = _net_outstanding(customer_balance_amount, customer_notes_amount)
-
-    supplier_bills_amount = supplier_regular_bills_qs.aggregate(total=Sum('supplierbillamount'))['total'] or Decimal('0.00')
-    supplier_paid_amount = supplier_regular_bills_qs.aggregate(total=Sum('paidamount'))['total'] or Decimal('0.00')
-    supplier_balance_amount = supplier_regular_bills_qs.aggregate(total=Sum('balance'))['total'] or Decimal('0.00')
-    supplier_notes_amount = supplier_note_bills_qs.aggregate(total=Sum('supplierbillamount'))['total'] or Decimal('0.00')
-    supplier_outstanding_amount = _net_outstanding(supplier_balance_amount, supplier_notes_amount)
-
+    # 3. Build customer bill items with linked payments
     customer_bill_items = []
-    customer_note_items = []
-    customer_payment_items = []
-    for bill in customer_regular_bills:
-        item = {
-            'id': bill.customerbillid,
-            'customer_id': bill.customerid.customerid if getattr(bill, 'customerid', None) else None,
-            'customer_name': bill.customerid.customername if getattr(bill, 'customerid', None) else '',
-            'bill_no': bill.customerbillno or '',
-            'date': str(bill.customerbilldate) if bill.customerbilldate else '',
-            'due_date': str(bill.customerbillduedate) if bill.customerbillduedate else '',
-            'amount': float(bill.customerbillamount or 0),
-            'paid_amount': float(bill.paidamount or 0),
-            'balance': float(bill.balance or 0),
-            'narration': bill.narration or '',
-            'type': bill.customerbilltype or '',
-        }
-        customer_bill_items.append(item)
-        if item['paid_amount'] > 0:
-            customer_payment_items.append({**item, 'status': 'Paid' if item['balance'] <= 0 else 'Partially Paid'})
+    for customer in customers:
+        c_sales = [b for b in customer_regular_bills if b.customerid_id == customer.customerid]
+        c_rcpts = [b for b in customer_payment_bills if b.customerid_id == customer.customerid]
+        c_mapping = _allocate_payments_to_bills(c_sales, c_rcpts)
 
+        for bill in c_sales:
+            p_list = c_mapping.get(bill.pk, [])
+            matched_payments = [{
+                'payment_id': p.customerbillno or str(p.customerbillid),
+                'bill_no': p.customerbillno or '',
+                'date': str(p.customerbilldate) if p.customerbilldate else '',
+                'amount': float(p.customerbillamount or 0),
+                'type': p.customerbilltype or 'Receipt',
+                'narration': p.narration or '',
+            } for p in p_list]
+
+            p_tot = sum(p['amount'] for p in matched_payments)
+            amt = float(bill.customerbillamount or 0)
+            bal = max(0.0, amt - p_tot)
+
+            customer_bill_items.append({
+                'id': bill.customerbillid,
+                'customer_id': customer.customerid,
+                'customer_name': customer.customername,
+                'bill_no': bill.customerbillno or '',
+                'date': str(bill.customerbilldate) if bill.customerbilldate else '',
+                'due_date': str(bill.customerbillduedate) if bill.customerbillduedate else '',
+                'amount': amt,
+                'paid_amount': p_tot,
+                'balance': bal,
+                'narration': bill.narration or '',
+                'type': bill.customerbilltype or 'Sales',
+                'payments': matched_payments,
+            })
+
+    # 4. Customer note items (Returns / Credit Notes)
+    customer_note_items = []
     for bill in customer_note_bills:
         customer_note_items.append({
             'id': bill.customerbillid,
@@ -286,33 +329,69 @@ def admin_user_customer_supplier_overview(request, user_id):
             'date': str(bill.customerbilldate) if bill.customerbilldate else '',
             'due_date': str(bill.customerbillduedate) if bill.customerbillduedate else '',
             'amount': float(bill.customerbillamount or 0),
-            'paid_amount': float(bill.paidamount or 0),
-            'balance': float(bill.balance or 0),
+            'paid_amount': 0.0,
+            'balance': float(bill.customerbillamount or 0),
             'narration': bill.narration or '',
-            'type': bill.customerbilltype or '',
+            'type': bill.customerbilltype or 'Return',
         })
 
-    supplier_bill_items = []
-    supplier_note_items = []
-    supplier_payment_items = []
-    for bill in supplier_regular_bills:
-        item = {
-            'id': bill.supplierbillid,
-            'supplier_id': bill.supplierid.supplierid if getattr(bill, 'supplierid', None) else None,
-            'supplier_name': bill.supplierid.suppliername if getattr(bill, 'supplierid', None) else '',
-            'bill_no': bill.supplierbillno or '',
-            'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
-            'due_date': str(bill.supplierbillduedate) if bill.supplierbillduedate else '',
-            'amount': float(bill.supplierbillamount or 0),
-            'paid_amount': float(bill.paidamount or 0),
-            'balance': float(bill.balance or 0),
+    # 5. Customer payment items (Receipts)
+    customer_payment_items = []
+    for bill in customer_payment_bills:
+        customer_payment_items.append({
+            'id': bill.customerbillid,
+            'customer_id': bill.customerid.customerid if getattr(bill, 'customerid', None) else None,
+            'customer_name': bill.customerid.customername if getattr(bill, 'customerid', None) else '',
+            'bill_no': bill.customerbillno or '',
+            'date': str(bill.customerbilldate) if bill.customerbilldate else '',
+            'due_date': str(bill.customerbillduedate) if bill.customerbillduedate else '',
+            'amount': float(bill.customerbillamount or 0),
+            'paid_amount': float(bill.customerbillamount or 0),
+            'balance': 0.0,
             'narration': bill.narration or '',
-            'type': bill.supplierbilltype or '',
-        }
-        supplier_bill_items.append(item)
-        if item['paid_amount'] > 0:
-            supplier_payment_items.append({**item, 'status': 'Paid' if item['balance'] <= 0 else 'Partially Paid'})
+            'type': bill.customerbilltype or 'Receipt',
+            'status': 'Paid',
+        })
 
+    # 6. Build supplier bill items with linked payments
+    supplier_bill_items = []
+    for supplier in suppliers:
+        s_purchases = [b for b in supplier_regular_bills if b.supplierid_id == supplier.supplierid]
+        s_pays = [b for b in supplier_payment_bills if b.supplierid_id == supplier.supplierid]
+        s_mapping = _allocate_payments_to_bills(s_purchases, s_pays)
+
+        for bill in s_purchases:
+            p_list = s_mapping.get(bill.pk, [])
+            matched_payments = [{
+                'payment_id': p.supplierbillno or str(p.supplierbillid),
+                'bill_no': p.supplierbillno or '',
+                'date': str(p.supplierbilldate) if p.supplierbilldate else '',
+                'amount': float(p.supplierbillamount or 0),
+                'type': p.supplierbilltype or 'Payment',
+                'narration': p.narration or '',
+            } for p in p_list]
+
+            p_tot = sum(p['amount'] for p in matched_payments)
+            amt = float(bill.supplierbillamount or 0)
+            bal = max(0.0, amt - p_tot)
+
+            supplier_bill_items.append({
+                'id': bill.supplierbillid,
+                'supplier_id': supplier.supplierid,
+                'supplier_name': supplier.suppliername,
+                'bill_no': bill.supplierbillno or '',
+                'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+                'due_date': str(bill.supplierbillduedate) if bill.supplierbillduedate else '',
+                'amount': amt,
+                'paid_amount': p_tot,
+                'balance': bal,
+                'narration': bill.narration or '',
+                'type': bill.supplierbilltype or 'Purchase',
+                'payments': matched_payments,
+            })
+
+    # 7. Supplier note items (Debit Notes)
+    supplier_note_items = []
     for bill in supplier_note_bills:
         supplier_note_items.append({
             'id': bill.supplierbillid,
@@ -322,22 +401,43 @@ def admin_user_customer_supplier_overview(request, user_id):
             'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
             'due_date': str(bill.supplierbillduedate) if bill.supplierbillduedate else '',
             'amount': float(bill.supplierbillamount or 0),
-            'paid_amount': float(bill.paidamount or 0),
-            'balance': float(bill.balance or 0),
+            'paid_amount': 0.0,
+            'balance': float(bill.supplierbillamount or 0),
             'narration': bill.narration or '',
-            'type': bill.supplierbilltype or '',
+            'type': bill.supplierbilltype or 'Debit Note',
         })
 
+    # 8. Supplier payment items (Payments)
+    supplier_payment_items = []
+    for bill in supplier_payment_bills:
+        supplier_payment_items.append({
+            'id': bill.supplierbillid,
+            'supplier_id': bill.supplierid.supplierid if getattr(bill, 'supplierid', None) else None,
+            'supplier_name': bill.supplierid.suppliername if getattr(bill, 'supplierid', None) else '',
+            'bill_no': bill.supplierbillno or '',
+            'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+            'due_date': str(bill.supplierbillduedate) if bill.supplierbillduedate else '',
+            'amount': float(bill.supplierbillamount or 0),
+            'paid_amount': float(bill.supplierbillamount or 0),
+            'balance': 0.0,
+            'narration': bill.narration or '',
+            'type': bill.supplierbilltype or 'Payment',
+            'status': 'Paid',
+        })
+
+    # 9. Customer list with individual financial totals
     customer_list = []
     for customer in customers:
-        customer_entry_bills = CustomerBill.objects.filter(customerid=customer)
-        customer_entry_note_bills = [bill for bill in customer_entry_bills if _is_note_entry(getattr(bill, 'customerbilltype', None))]
-        customer_entry_regular_bills = [bill for bill in customer_entry_bills if not _is_note_entry(getattr(bill, 'customerbilltype', None))]
-        customer_entry_bills_amount = sum(float(b.customerbillamount or 0) for b in customer_entry_regular_bills)
-        customer_entry_notes_amount = sum(float(b.customerbillamount or 0) for b in customer_entry_note_bills)
-        customer_entry_paid_amount = sum(float(b.paidamount or 0) for b in customer_entry_regular_bills)
-        customer_entry_balance_amount = sum(float(b.balance or 0) for b in customer_entry_regular_bills)
-        customer_entry_outstanding_amount = customer_entry_balance_amount - customer_entry_notes_amount
+        c_entry_bills = CustomerBill.objects.filter(customerid=customer)
+        c_sales = [b for b in c_entry_bills if not _is_note_entry(b.customerbilltype) and not _is_payment_entry(b.customerbilltype, b.customerbillno)]
+        c_notes = [b for b in c_entry_bills if _is_note_entry(b.customerbilltype)]
+        c_pays = [b for b in c_entry_bills if _is_payment_entry(b.customerbilltype, b.customerbillno)]
+
+        c_sales_amt = sum(float(b.customerbillamount or 0) for b in c_sales)
+        c_notes_amt = sum(float(b.customerbillamount or 0) for b in c_notes)
+        c_paid_amt = sum(float(b.customerbillamount or 0) for b in c_pays)
+        c_outstanding = (c_sales_amt - c_notes_amt) - c_paid_amt
+
         customer_list.append({
             'id': customer.customerid,
             'name': customer.customername,
@@ -345,12 +445,12 @@ def admin_user_customer_supplier_overview(request, user_id):
             'phone': customer.customerphonenumber or '',
             'email': customer.customeremail or '',
             'address': customer.customeraddress or '',
-            'bills_count': len(customer_entry_regular_bills),
-            'bills_amount': customer_entry_bills_amount,
-            'credit_notes_count': len(customer_entry_note_bills),
-            'credit_notes_amount': customer_entry_notes_amount,
-            'paid_amount': customer_entry_paid_amount,
-            'balance_amount': customer_entry_outstanding_amount,
+            'bills_count': len(c_sales),
+            'bills_amount': c_sales_amt,
+            'credit_notes_count': len(c_notes),
+            'credit_notes_amount': c_notes_amt,
+            'paid_amount': c_paid_amt,
+            'balance_amount': c_outstanding,
         })
 
     customer_summary = _build_financial_summary(
@@ -363,16 +463,19 @@ def admin_user_customer_supplier_overview(request, user_id):
         balance_amount=sum(float(item['balance_amount']) for item in customer_list),
     )
 
+    # 10. Supplier list with individual financial totals
     supplier_list = []
     for supplier in suppliers:
-        supplier_entry_bills = SupplierBill.objects.filter(supplierid=supplier)
-        supplier_entry_note_bills = [bill for bill in supplier_entry_bills if _is_note_entry(getattr(bill, 'supplierbilltype', None))]
-        supplier_entry_regular_bills = [bill for bill in supplier_entry_bills if not _is_note_entry(getattr(bill, 'supplierbilltype', None))]
-        supplier_entry_bills_amount = sum(float(b.supplierbillamount or 0) for b in supplier_entry_regular_bills)
-        supplier_entry_notes_amount = sum(float(b.supplierbillamount or 0) for b in supplier_entry_note_bills)
-        supplier_entry_paid_amount = sum(float(b.paidamount or 0) for b in supplier_entry_regular_bills)
-        supplier_entry_balance_amount = sum(float(b.balance or 0) for b in supplier_entry_regular_bills)
-        supplier_entry_outstanding_amount = supplier_entry_balance_amount - supplier_entry_notes_amount
+        s_entry_bills = SupplierBill.objects.filter(supplierid=supplier)
+        s_purchases = [b for b in s_entry_bills if not _is_note_entry(b.supplierbilltype) and not _is_payment_entry(b.supplierbilltype, b.supplierbillno)]
+        s_notes = [b for b in s_entry_bills if _is_note_entry(b.supplierbilltype)]
+        s_pays = [b for b in s_entry_bills if _is_payment_entry(b.supplierbilltype, b.supplierbillno)]
+
+        s_purchases_amt = sum(float(b.supplierbillamount or 0) for b in s_purchases)
+        s_notes_amt = sum(float(b.supplierbillamount or 0) for b in s_notes)
+        s_paid_amt = sum(float(b.supplierbillamount or 0) for b in s_pays)
+        s_outstanding = (s_purchases_amt - s_notes_amt) - s_paid_amt
+
         supplier_list.append({
             'id': supplier.supplierid,
             'name': supplier.suppliername,
@@ -380,12 +483,12 @@ def admin_user_customer_supplier_overview(request, user_id):
             'phone': supplier.supplierphonenumber or '',
             'email': supplier.supplieremail or '',
             'address': supplier.supplieraddress or '',
-            'bills_count': len(supplier_entry_regular_bills),
-            'bills_amount': supplier_entry_bills_amount,
-            'debit_notes_count': len(supplier_entry_note_bills),
-            'debit_notes_amount': supplier_entry_notes_amount,
-            'paid_amount': supplier_entry_paid_amount,
-            'balance_amount': supplier_entry_outstanding_amount,
+            'bills_count': len(s_purchases),
+            'bills_amount': s_purchases_amt,
+            'debit_notes_count': len(s_notes),
+            'debit_notes_amount': s_notes_amt,
+            'paid_amount': s_paid_amt,
+            'balance_amount': s_outstanding,
         })
 
     supplier_summary = _build_financial_summary(
@@ -400,6 +503,7 @@ def admin_user_customer_supplier_overview(request, user_id):
 
     return Response({
         'company': company.companyname,
+        'companyid': company.companyid,
         'totalCustomers': customer_summary['count'],
         'totalSuppliers': supplier_summary['count'],
         'customers': customer_summary,
@@ -413,6 +517,7 @@ def admin_user_customer_supplier_overview(request, user_id):
         'supplier_notes': supplier_note_items,
         'supplier_payments': supplier_payment_items,
     })
+
 
 
 @api_view(['GET'])

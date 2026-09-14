@@ -65,48 +65,60 @@ def get_company_conversations(request, company_id):
 def get_company_executive_conversations(request, company_id):
     """
     Returns supplier executive conversations for a store.
-    Automatically includes all executives allocated to this store via ExecutiveAllocation.
+    Strictly returns the conversation with the CURRENTLY ALLOCATED executive for each connected supplier.
     """
     try:
         from ..models import ExecutiveAllocation
         company_id = _resolve_company_id(company_id)
-        # Connected suppliers for this store
+        
+        # 1. Connected suppliers for this store
         store_suppliers = list(Supplier.objects.filter(companyid=company_id))
         store_supplier_phones = {s.supplierphonenumber for s in store_suppliers if s.supplierphonenumber}
         store_supplier_names = {s.suppliername.strip().lower() for s in store_suppliers if s.suppliername}
 
-        # Ensure conversations exist for allocated executives whose supplier is connected to this store
-        allocations = ExecutiveAllocation.objects.filter(company_id=company_id).select_related('executive', 'executive__supplier_user')
-        for alloc in allocations:
-            if alloc.executive and alloc.executive.supplier_user:
-                su = alloc.executive.supplier_user
-                is_connected = (
-                    (su.supplieruserphone and su.supplieruserphone in store_supplier_phones) or
-                    (su.suppliername and su.suppliername.strip().lower() in store_supplier_names)
-                )
-                if is_connected:
-                    Conversation.objects.get_or_create(
-                        company_id=company_id,
-                        executive=alloc.executive,
-                        defaults={'conversation_type': 'executive'}
-                    )
+        # 2. Get active executive allocations for this company
+        allocations = ExecutiveAllocation.objects.filter(company_id=company_id).select_related(
+            'executive', 'executive__supplier_user', 'executive__manager', 'executive__manager__supplier_user'
+        )
 
+        allocated_exec_ids = set()
+        for alloc in allocations:
+            if alloc.executive:
+                allocated_exec_ids.add(alloc.executive.executiveid)
+                Conversation.objects.get_or_create(
+                    company_id=company_id,
+                    executive=alloc.executive,
+                    defaults={'conversation_type': 'executive'}
+                )
+
+        # 3. Query conversations for this company
+        # We exclusively prioritize currently allocated executives
         conversations = Conversation.objects.filter(
             company_id=company_id,
             executive__isnull=False
-        ).select_related('executive', 'executive__supplier_user').order_by('-updated_at')
+        ).select_related(
+            'executive', 'executive__supplier_user', 'executive__manager', 'executive__manager__supplier_user'
+        ).order_by('-updated_at')
 
         result = []
         for conv in conversations:
             if not conv.executive:
                 continue
+            ex = conv.executive
+            
+            # If there are allocations for this store, only include currently allocated executives (unless conversation has messages)
+            is_allocated = ex.executiveid in allocated_exec_ids
             last_message = conv.messages.order_by('-timestamp').first()
+            if not is_allocated and last_message is None:
+                continue
+
             unread_count = conv.messages.filter(sender_type='executive', is_read=False).count()
+            su = ex.supplier_user or (ex.manager.supplier_user if ex.manager else None)
             supp_name = 'Supplier'
             supp_id = None
             comp_supp = None
-            if conv.executive.supplier_user:
-                su = conv.executive.supplier_user
+
+            if su:
                 supp_name = su.suppliername or 'Supplier'
                 if su.supplieruserphone:
                     comp_supp = Supplier.objects.filter(companyid=company_id, supplierphonenumber=su.supplieruserphone).first()
@@ -118,14 +130,11 @@ def get_company_executive_conversations(request, company_id):
                 else:
                     supp_id = su.supplierid_id or su.supplieruserid
 
-            # Only include if supplier is connected to this company or has messages
-            if comp_supp is None and last_message is None:
-                continue
-
             result.append({
                 'conversation_id': conv.id,
-                'executive_id': conv.executive.executiveid,
-                'executive_name': conv.executive.executive_name,
+                'executive_id': ex.executiveid,
+                'executive_name': ex.executive_name,
+                'is_allocated': is_allocated,
                 'supplier_id': supp_id,
                 'supplier_name': supp_name,
                 'company_name': supp_name,
@@ -138,8 +147,17 @@ def get_company_executive_conversations(request, company_id):
                 'has_audio': bool(last_message.audio_file) if last_message else False,
                 'conversation_type': 'executive',
             })
-        # Prioritize conversations with messages or audio, then deduplicate by supplier
-        result.sort(key=lambda x: (1 if (x['last_message'] or x['has_audio']) else 0, x['updated_at']), reverse=True)
+
+        # Deduplicate by supplier, giving HIGHEST PRIORITY to currently allocated executives!
+        result.sort(
+            key=lambda x: (
+                1 if x.get('is_allocated') else 0,
+                1 if (x['last_message'] or x['has_audio']) else 0,
+                x['updated_at']
+            ),
+            reverse=True
+        )
+
         seen_supp_ids = set()
         seen_supp_names = set()
         deduped = []
@@ -155,6 +173,7 @@ def get_company_executive_conversations(request, company_id):
             if sname:
                 seen_supp_names.add(sname)
             deduped.append(item)
+
         return Response(deduped)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -198,16 +217,32 @@ def get_enduser_conversations(request, enduser_id):
 def get_executive_conversations(request, executive_id):
     """
     Returns store conversations for a supplier executive.
+    Strictly includes companies currently allocated to this executive.
     """
     try:
+        from ..models import ExecutiveAllocation
+        # Ensure conversations exist for all companies allocated to this executive
+        allocations = ExecutiveAllocation.objects.filter(executive_id=executive_id).select_related('company')
+        allocated_company_ids = set()
+        for alloc in allocations:
+            if alloc.company:
+                allocated_company_ids.add(alloc.company.companyid)
+                Conversation.objects.get_or_create(
+                    company=alloc.company,
+                    executive_id=executive_id,
+                    defaults={'conversation_type': 'executive'}
+                )
+
         conversations = Conversation.objects.filter(
-            executive_id=executive_id
+            executive_id=executive_id,
+            company_id__in=allocated_company_ids
         ).select_related('company').order_by('-updated_at')
 
         result = []
         for conv in conversations:
             if not conv.company:
                 continue
+            
             last_message = conv.messages.order_by('-timestamp').first()
             unread_count = conv.messages.filter(sender_type='company', is_read=False).count()
             result.append({

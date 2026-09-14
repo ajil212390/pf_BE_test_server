@@ -127,17 +127,36 @@ def allocate_company_to_executive(request):
     company_ids = data.get('company_ids', [])
 
     try:
-        executive = SupplierExecutive.objects.get(executiveid=executive_id)
+        from ..models import Conversation
+        executive = SupplierExecutive.objects.select_related('supplier_user', 'manager').get(executiveid=executive_id)
+        supp_user = executive.supplier_user or (executive.manager.supplier_user if executive.manager else None)
+
+        # 1. Clear this executive's existing allocations
         ExecutiveAllocation.objects.filter(executive=executive).delete()
+
+        # 2. If other executives of the same supplier were allocated to these companies, remove their allocation for these companies
+        if supp_user:
+            ExecutiveAllocation.objects.filter(
+                executive__supplier_user=supp_user,
+                company_id__in=company_ids
+            ).exclude(executive=executive).delete()
+
+        # 3. Create new allocations and ensure conversation exists
         for cid in company_ids:
-            company = Company.objects.get(companyid=cid)
-            ExecutiveAllocation.objects.create(executive=executive, company=company)
+            try:
+                company = Company.objects.get(companyid=cid)
+                ExecutiveAllocation.objects.get_or_create(executive=executive, company=company)
+                Conversation.objects.get_or_create(
+                    company=company,
+                    executive=executive,
+                    defaults={'conversation_type': 'executive'}
+                )
+            except Company.DoesNotExist:
+                continue
 
         return Response({'message': 'Companies allocated successfully'}, status=status.HTTP_200_OK)
     except SupplierExecutive.DoesNotExist:
         return Response({'error': 'Executive not found.'}, status=status.HTTP_404_NOT_FOUND)
-    except Company.DoesNotExist:
-        return Response({'error': 'One or more companies not found.'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 

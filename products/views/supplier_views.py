@@ -17,6 +17,48 @@ from ..models import Commitment, Supplier, Supplieruser, SupplierBill, Company, 
     ],
     responses={200: OpenApiResponse(description="Supplier found"), 404: OpenApiResponse(description="Not found")}
 )
+def _is_note_entry(entry_type):
+    if not entry_type:
+        return False
+    normalized = str(entry_type).strip().lower()
+    return any(marker in normalized for marker in ['return', 'credit', 'debit', 'note', 'rtn'])
+
+
+def _is_payment_entry(entry_type, bill_no=''):
+    if entry_type:
+        normalized = str(entry_type).strip().lower()
+        if any(marker in normalized for marker in ['receipt', 'payment', 'rcpt', 'pay']):
+            return True
+    if bill_no:
+        bn = str(bill_no).strip().lower()
+        if bn.startswith('rcpt') or bn.startswith('pay') or 'rcpt-' in bn or 'pay-' in bn:
+            return True
+    return False
+
+
+def _allocate_payments_to_bills(regular_bills, payment_bills):
+    bill_payments_map = {b.pk: [] for b in regular_bills}
+    sorted_bills = sorted(regular_bills, key=lambda b: (getattr(b, 'customerbilldate', None) or getattr(b, 'supplierbilldate', None), b.pk))
+    sorted_payments = sorted(payment_bills, key=lambda p: (getattr(p, 'customerbilldate', None) or getattr(p, 'supplierbilldate', None), p.pk))
+    
+    bill_idx = 0
+    cur_bill_capacity = float(getattr(sorted_bills[0], 'customerbillamount', None) or getattr(sorted_bills[0], 'supplierbillamount', None)) if sorted_bills else 0
+    cur_bill_allocated = 0.0
+    
+    for p in sorted_payments:
+        p_amt = float(getattr(p, 'customerbillamount', None) or getattr(p, 'supplierbillamount', None) or 0)
+        while bill_idx < len(sorted_bills) - 1 and cur_bill_allocated + p_amt > cur_bill_capacity + 0.01:
+            bill_idx += 1
+            cur_bill_capacity = float(getattr(sorted_bills[bill_idx], 'customerbillamount', None) or getattr(sorted_bills[bill_idx], 'supplierbillamount', None))
+            cur_bill_allocated = 0.0
+        
+        if bill_idx < len(sorted_bills):
+            bill_payments_map[sorted_bills[bill_idx].pk].append(p)
+            cur_bill_allocated += p_amt
+            
+    return bill_payments_map
+
+
 @api_view(['GET'])
 def search_supplier_globally(request):
     phone = request.GET.get('phone')
@@ -208,34 +250,83 @@ def supplier_bills(request, supplier_user_id):
                 latest_commitments[c.bill_no] = c.new_due_date or (str(c.bill_due_date) if c.bill_due_date else '')
 
         result = []
-        for bill in bills:
-            company = bill.supplierid.companyid if getattr(bill, 'supplierid', None) else None
-            b_no = bill.supplierbillno or ''
-            due_date = latest_commitments.get(b_no) or (str(bill.supplierbillduedate) if bill.supplierbillduedate else '')
+        for supplier in suppliers:
+            s_bills = [b for b in bills if b.supplierid_id == supplier.supplierid]
+            company = supplier.companyid
 
-            result.append({
-                'id': bill.supplierbillid,
-                'supplier_id': bill.supplierid.supplierid if getattr(bill, 'supplierid', None) else None,
-                'supplier_name': bill.supplierid.suppliername if getattr(bill, 'supplierid', None) else '',
-                'bill_no': b_no,
-                'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
-                'due_date': due_date,
-                'amount': float(bill.supplierbillamount or 0),
-                'paid_amount': float(bill.paidamount or 0),
-                'balance': float(bill.balance or 0),
-                'type': bill.supplierbilltype or '',
-                'narration': bill.narration or '',
-                'company_id': company.companyid if company else None,
-                'company_name': company.companyname if company else '',
-                'company_phone': str(company.companyphonenumber) if company and company.companyphonenumber else '',
-                'company_email': '',
-                'company_gst': '',
-                'company_address': '',
-            })
+            s_purchases = [b for b in s_bills if not _is_note_entry(b.supplierbilltype) and not _is_payment_entry(b.supplierbilltype, b.supplierbillno)]
+            s_notes = [b for b in s_bills if _is_note_entry(b.supplierbilltype)]
+            s_pays = [b for b in s_bills if _is_payment_entry(b.supplierbilltype, b.supplierbillno)]
+
+            s_mapping = _allocate_payments_to_bills(s_purchases, s_pays)
+
+            for bill in s_purchases:
+                b_no = bill.supplierbillno or ''
+                due_date = latest_commitments.get(b_no) or (str(bill.supplierbillduedate) if bill.supplierbillduedate else '')
+                p_list = s_mapping.get(bill.pk, [])
+                matched_payments = [{
+                    'payment_id': p.supplierbillno or str(p.supplierbillid),
+                    'bill_no': p.supplierbillno or '',
+                    'date': str(p.supplierbilldate) if p.supplierbilldate else '',
+                    'amount': float(p.supplierbillamount or 0),
+                    'type': p.supplierbilltype or 'Payment',
+                    'narration': p.narration or '',
+                } for p in p_list]
+
+                p_tot = sum(p['amount'] for p in matched_payments)
+                amt = float(bill.supplierbillamount or 0)
+                bal = max(0.0, amt - p_tot)
+
+                result.append({
+                    'id': bill.supplierbillid,
+                    'supplier_id': supplier.supplierid,
+                    'supplier_name': supplier.suppliername or '',
+                    'bill_no': b_no,
+                    'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+                    'due_date': due_date,
+                    'amount': amt,
+                    'paid_amount': p_tot,
+                    'balance': bal,
+                    'type': bill.supplierbilltype or 'Purchase',
+                    'narration': bill.narration or '',
+                    'company_id': company.companyid if company else None,
+                    'company_name': company.companyname if company else '',
+                    'company_phone': str(company.companyphonenumber) if company and company.companyphonenumber else '',
+                    'company_email': '',
+                    'company_gst': '',
+                    'company_address': '',
+                    'payments': matched_payments,
+                })
+
+            for bill in s_notes:
+                b_no = bill.supplierbillno or ''
+                due_date = str(bill.supplierbillduedate) if bill.supplierbillduedate else ''
+                amt = float(bill.supplierbillamount or 0)
+                result.append({
+                    'id': bill.supplierbillid,
+                    'supplier_id': supplier.supplierid,
+                    'supplier_name': supplier.suppliername or '',
+                    'bill_no': b_no,
+                    'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+                    'due_date': due_date,
+                    'amount': amt,
+                    'paid_amount': 0.0,
+                    'balance': amt,
+                    'type': bill.supplierbilltype or 'Debit Note',
+                    'narration': bill.narration or '',
+                    'company_id': company.companyid if company else None,
+                    'company_name': company.companyname if company else '',
+                    'company_phone': str(company.companyphonenumber) if company and company.companyphonenumber else '',
+                    'company_email': '',
+                    'company_gst': '',
+                    'company_address': '',
+                    'payments': [],
+                })
 
         return Response(result, status=status.HTTP_200_OK)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 @api_view(['GET'])
@@ -269,73 +360,27 @@ def supplier_dashboard(request, supplier_user_id):
         if not company:
             continue
 
-        bills = SupplierBill.objects.filter(supplierid=supplier)
+        bills = list(SupplierBill.objects.filter(supplierid=supplier))
 
-        comp_bills_count = 0
-        comp_amount = 0.0
-        comp_paid = 0.0
-        comp_balance = 0.0
-        comp_debit_notes = 0
-        comp_debit_amount = 0.0
+        s_purchases = [b for b in bills if not _is_note_entry(b.supplierbilltype) and not _is_payment_entry(b.supplierbilltype, b.supplierbillno)]
+        s_notes = [b for b in bills if _is_note_entry(b.supplierbilltype)]
+        s_pays = [b for b in bills if _is_payment_entry(b.supplierbilltype, b.supplierbillno)]
 
-        main_bills = []
-        payment_bills = []
-        for bill in bills:
-            bill_type = (bill.supplierbilltype or '').lower()
-            bill_no = (bill.supplierbillno or '').lower()
-            if 'receipt' in bill_type or 'payment' in bill_type or 'payments' in bill_type or bill_no.startswith('rcpt') or 'rcpt-' in bill_no or bill_no.startswith('pay') or 'pay-' in bill_no:
-                payment_bills.append(bill)
-            else:
-                main_bills.append(bill)
+        s_mapping = _allocate_payments_to_bills(s_purchases, s_pays)
 
-        for bill in main_bills:
-            amount = float(bill.supplierbillamount or 0)
-            paid = float(bill.paidamount or 0)
-            bal = float(bill.balance or 0)
+        comp_bills_count = len(s_purchases)
+        comp_amount = sum(float(b.supplierbillamount or 0) for b in s_purchases)
+        comp_paid = sum(float(b.supplierbillamount or 0) for b in s_pays)
+        comp_debit_notes = len(s_notes)
+        comp_debit_amount = sum(float(b.supplierbillamount or 0) for b in s_notes)
+        comp_balance = (comp_amount - comp_debit_amount) - comp_paid
 
-            bill_type = (bill.supplierbilltype or '').lower()
-            if 'return' in bill_type or 'credit' in bill_type or 'refund' in bill_type or bill.supplierbilltype == 'Debit Note':
-                comp_debit_notes += 1
-                comp_debit_amount += amount
-                total_debit_notes_count += 1
-                total_debit_notes_amount += amount
-                continue
-
-            matched_payments_sum = 0.0
-            bill_no = (bill.supplierbillno or '').strip().lower()
-            bill_id = str(bill.supplierbillid or '').strip().lower()
-
-            for p in payment_bills:
-                p_type = (p.supplierbilltype or '').lower()
-                p_no = (p.supplierbillno or '').lower()
-                p_ref = (getattr(p, 'reference', '') or '').lower()
-                p_against = (getattr(p, 'against', '') or '').lower()
-
-                refs = [p_ref, p_against, p_no, str(p.supplierbillid or '').lower()]
-
-                is_match = False
-                if bill_no and bill_no in refs:
-                    is_match = True
-                elif bill_id and bill_id in refs:
-                    is_match = True
-                elif bill_no and bill_no in p_no:
-                    is_match = True
-
-                if is_match:
-                    p_amt = float(p.supplierbillamount or p.paidamount or 0)
-                    matched_payments_sum += p_amt
-
-            actual_paid = matched_payments_sum if matched_payments_sum > 0 else paid
-
-            comp_bills_count += 1
-            comp_amount += amount
-            comp_paid += actual_paid
-            comp_balance += amount - actual_paid
-
-            total_bills += 1
-            total_amount += amount
-            total_paid += actual_paid
-            total_balance += amount - actual_paid
+        total_bills += comp_bills_count
+        total_amount += comp_amount
+        total_paid += comp_paid
+        total_balance += comp_balance
+        total_debit_notes_count += comp_debit_notes
+        total_debit_notes_amount += comp_debit_amount
 
         companies_data.append({
             'company_id': company.companyid,
@@ -372,6 +417,7 @@ def supplier_dashboard(request, supplier_user_id):
         },
         'companies': companies_data
     }, status=status.HTTP_200_OK)
+
 
 
 @extend_schema(
