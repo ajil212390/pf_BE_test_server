@@ -10,7 +10,7 @@ from .views import (
     admin_user_customer_supplier_overview,
     register_enduser, login_enduser, login_supplier,
     search_supplier_globally, search_local_supplier, connect_supplier, supplier_bills, onboard_supplier, supplier_dashboard,
-    get_company_conversations, get_company_executive_conversations, get_enduser_conversations, get_executive_conversations, get_conversation_messages, send_message, send_order_message, delete_message, update_order_status,
+    get_company_conversations, get_company_executive_conversations, get_enduser_conversations, get_executive_conversations, get_conversation_messages, send_message, send_order_message, get_or_create_company_buyer_profile, delete_message, update_order_status,
     delete_conversations, get_enduser_orders, get_company_orders,
     register_supplier_executive, login_supplier_executive,
     get_supplier_executives, allocate_company_to_executive,
@@ -20,6 +20,7 @@ from .views import (
     get_supplier_managers, get_manager_dashboard, delete_supplier_manager,
     delete_supplier_executive,
     get_supplier_products, manage_supplier_products,
+    update_fcm_token,
 )
 
 router = DefaultRouter()
@@ -42,6 +43,7 @@ urlpatterns = [
     path('admin/user/<int:user_id>/products/', admin_user_products),
     path('admin/user/<int:user_id>/customer-supplier-overview/', admin_user_customer_supplier_overview),
     path('admin/company/<int:company_id>/products/', admin_company_products),
+    path('update-fcm-token/', update_fcm_token),
     path('register-enduser/', register_enduser),
     path('login-enduser/', login_enduser),
     path('login-supplier/', login_supplier),
@@ -65,6 +67,7 @@ urlpatterns = [
     path('chat/messages/<int:message_id>/status/', update_order_status),
     path('chat/send/', send_message),
     path('chat/send-order/', send_order_message),
+    path('chat/company-buyer-profile/', get_or_create_company_buyer_profile),
     path('chat/orders/enduser/<int:enduser_id>/', get_enduser_orders),
     path('chat/orders/company/<int:company_id>/', get_company_orders),
     

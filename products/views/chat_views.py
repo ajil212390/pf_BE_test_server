@@ -1,10 +1,13 @@
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
 from rest_framework import serializers
 
-from ..models import Conversation, ChatMessage, SupplierExecutive, Supplier, Company, Users
+from ..models import Conversation, ChatMessage, SupplierExecutive, Supplier, Company, Users, DeviceFCMToken, EndUser
+from ..fcm_utils import notify_chat_message, notify_new_order, notify_order_status, notify_bill_sent
+
 
 
 def _resolve_company_id(company_id):
@@ -372,6 +375,23 @@ def send_message(request):
         conversation.updated_at = msg.timestamp
         conversation.save()
 
+        # Trigger Push Notification
+        try:
+            raw_text = (text_content or '').strip()
+            is_bill = 'order bill' in raw_text.lower() or '🧾' in raw_text or '[ref:#' in raw_text
+            if is_bill:
+                notify_bill_sent(conversation, raw_text)
+            else:
+                notify_chat_message(
+                    conversation=conversation,
+                    sender_type=sender_type,
+                    text_content=text_content,
+                    has_audio=bool(audio_file),
+                    has_image=bool(image_file)
+                )
+        except Exception as _fcm_err:
+            print(f"[FCM] Error notifying in send_message: {_fcm_err}")
+
         return Response({
             'success': True,
             'message_id': msg.id,
@@ -404,12 +424,90 @@ def send_message(request):
     ),
     responses={200: OpenApiResponse(description="Order sent"), 400: OpenApiResponse(description="Bad request")}
 )
+
+@api_view(['POST'])
+def get_or_create_company_buyer_profile(request):
+    """
+    Returns or creates a dedicated EndUser buyer account for a company.
+    This allows a company to switch to Product Finder and place orders or chat with other companies
+    without mixing with their company dashboard seller messages or using a random enduser account.
+    """
+    try:
+        raw_company_id = request.data.get('company_id')
+        company_name = (request.data.get('company_name') or '').strip()
+        company = None
+
+        if raw_company_id:
+            resolved_id = _resolve_company_id(raw_company_id)
+            if resolved_id:
+                try:
+                    company = Company.objects.get(companyid=resolved_id)
+                except Company.DoesNotExist:
+                    company = None
+
+        if not company and company_name:
+            company = Company.objects.filter(companyname__iexact=company_name).first()
+
+        target_name = company.companyname if company else company_name
+        if not target_name:
+            return Response({'error': 'Company ID or name is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Look for existing EndUser matching company name exactly
+        enduser = EndUser.objects.filter(endusername__iexact=target_name).first()
+        if not enduser:
+            enduser = EndUser.objects.filter(endusername__iexact=f"{target_name} (Store)").first()
+
+        # 2. If not found, create one
+        if not enduser:
+            candidate_name = target_name
+            if EndUser.objects.filter(endusername__iexact=candidate_name).exists():
+                candidate_name = f"{target_name} (Store)"
+            phone_str = None
+            if company and company.companyphonenumber:
+                phone_str = str(company.companyphonenumber)
+            enduser = EndUser.objects.create(
+                endusername=candidate_name,
+                enduserpassword='1234',
+                enduserphone=phone_str,
+            )
+
+        return Response({
+            'success': True,
+            'enduser_id': enduser.endsuerid,
+            'enduser_name': enduser.endusername,
+            'enduser_phone': enduser.enduserphone or '',
+        }, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
 @api_view(['POST'])
 def send_order_message(request):
     try:
         company_id = _resolve_company_id(request.data.get('company_id'))
         enduser_id = request.data.get('enduser_id')
+        buyer_company_id = _resolve_company_id(request.data.get('buyer_company_id'))
         cart_items = request.data.get('cart_items', [])
+
+        # If order is placed by a company buyer, ensure we map to the company's dedicated EndUser account
+        if buyer_company_id:
+            try:
+                buyer_comp = Company.objects.get(companyid=buyer_company_id)
+                buyer_enduser = EndUser.objects.filter(endusername__iexact=buyer_comp.companyname).first()
+                if not buyer_enduser:
+                    buyer_enduser = EndUser.objects.filter(endusername__iexact=f"{buyer_comp.companyname} (Store)").first()
+                if not buyer_enduser:
+                    candidate_name = buyer_comp.companyname
+                    if EndUser.objects.filter(endusername__iexact=candidate_name).exists():
+                        candidate_name = f"{buyer_comp.companyname} (Store)"
+                    buyer_enduser = EndUser.objects.create(
+                        endusername=candidate_name,
+                        enduserpassword='1234',
+                        enduserphone=str(buyer_comp.companyphonenumber) if buyer_comp.companyphonenumber else None,
+                    )
+                enduser_id = buyer_enduser.endsuerid
+            except Exception as e:
+                print(f"[send_order_message] Error resolving buyer company {buyer_company_id}: {e}")
 
         conversation, created = Conversation.objects.get_or_create(
             company_id=company_id,
@@ -417,14 +515,17 @@ def send_order_message(request):
             defaults={'conversation_type': 'customer'}
         )
 
+        buyer_name = conversation.enduser.endusername if conversation.enduser else 'Customer'
         note = (request.data.get('note') or '').strip()
-        order_text = "🛍️ New Order\n\n"
+        order_text = f'🛒 New Order\nFrom: {buyer_name}\n\n'
         for item in cart_items:
             qty = item.get('qty', 1)
-            order_text += f"• {item.get('name')} (x{qty})\n"
+            name = item.get('name', 'Product')
+            price = item.get('price')
+            price_str = f' - ₹{price}' if price else ''
+            order_text += f'• {name} (x{qty}){price_str}\n'
         if note:
-            order_text += f"\n📝 Note: {note}\n"
-
+            order_text += f'\n📝 Note: {note}\n'
         msg = ChatMessage.objects.create(
             conversation=conversation,
             sender_type='enduser',
@@ -433,6 +534,13 @@ def send_order_message(request):
 
         conversation.updated_at = msg.timestamp
         conversation.save()
+
+        # Trigger Push Notification
+        try:
+            summary = ", ".join([f"{it.get('qty', 1)}x {it.get('name')}" for it in cart_items])
+            notify_new_order(conversation, summary)
+        except Exception as _fcm_err:
+            print(f"[FCM] Error notifying on order: {_fcm_err}")
 
         return Response({'success': True, 'message': 'Order sent as chat message.'})
     except Exception as e:
@@ -467,6 +575,12 @@ def update_order_status(request, message_id):
         msg = ChatMessage.objects.get(id=message_id)
         msg.order_status = status_val
         msg.save()
+
+        # Trigger Push Notification
+        try:
+            notify_order_status(msg.conversation, status_val)
+        except Exception as _fcm_err:
+            print(f"[FCM] Error notifying on order status: {_fcm_err}")
         return Response({'success': True, 'message': f'Order status updated to {status_val}'})
     except ChatMessage.DoesNotExist:
         return Response({'error': 'Message not found'}, status=status.HTTP_404_NOT_FOUND)
@@ -501,8 +615,8 @@ def get_enduser_orders(request, enduser_id):
     try:
         messages = ChatMessage.objects.filter(
             conversation__enduser_id=enduser_id,
-            conversation__conversation_type='customer',
-            text_content__startswith='🛍️ New Order'
+            conversation__conversation_type='customer'
+        ).filter(Q(text_content__contains='New Order') | Q(text_content__contains='🛍️')
         ).select_related('conversation__company').order_by('-timestamp')
 
         orders = []
@@ -528,8 +642,8 @@ def get_company_orders(request, company_id):
         company_id = _resolve_company_id(company_id)
         messages = ChatMessage.objects.filter(
             conversation__company_id=company_id,
-            conversation__conversation_type='customer',
-            text_content__startswith='🛍️ New Order'
+            conversation__conversation_type='customer'
+        ).filter(Q(text_content__contains='New Order') | Q(text_content__contains='🛍️')
         ).select_related('conversation__enduser').order_by('-timestamp')
 
         orders = []
@@ -545,5 +659,48 @@ def get_company_orders(request, company_id):
             })
 
         return Response(orders)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+def update_fcm_token(request):
+    """
+    Endpoint to store or update the FCM device token for any user role.
+    """
+    try:
+        fcm_token = request.data.get('fcm_token')
+        user_id = request.data.get('user_id')
+        user_type = (request.data.get('user_type') or '').lower().strip()
+
+        if not fcm_token or not user_id:
+            return Response({'error': 'fcm_token and user_id are required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        uid = int(user_id)
+        token_str = str(fcm_token).strip()
+
+        DeviceFCMToken.objects.update_or_create(
+            user_id=uid,
+            user_type=user_type,
+            defaults={'fcm_token': token_str}
+        )
+
+        if user_type == 'company':
+            u = Users.objects.filter(userid=uid).first()
+            if u and u.companyid_id and u.companyid_id != uid:
+                DeviceFCMToken.objects.update_or_create(
+                    user_id=u.companyid_id,
+                    user_type='company',
+                    defaults={'fcm_token': token_str}
+                )
+            for cu in Users.objects.filter(companyid=uid):
+                if cu.userid != uid:
+                    DeviceFCMToken.objects.update_or_create(
+                        user_id=cu.userid,
+                        user_type='company',
+                        defaults={'fcm_token': token_str}
+                    )
+
+        return Response({'success': True, 'message': f'FCM token registered for {user_type} #{user_id}'})
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

@@ -54,11 +54,13 @@ from .chat_views import (
     get_conversation_messages,
     send_message,
     send_order_message,
+    get_or_create_company_buyer_profile,
     delete_message,
     update_order_status,
     delete_conversations,
     get_enduser_orders,
     get_company_orders,
+    update_fcm_token,
 )
 
 from .executive_views import (
@@ -99,8 +101,8 @@ __all__ = [
     'get_supplier_products', 'manage_supplier_products',
     # chat
     'get_company_conversations', 'get_company_executive_conversations', 'get_enduser_conversations', 'get_executive_conversations', 'get_conversation_messages',
-    'send_message', 'send_order_message', 'delete_message', 'update_order_status',
-    'delete_conversations', 'get_enduser_orders', 'get_company_orders',
+    'send_message', 'send_order_message', 'get_or_create_company_buyer_profile', 'delete_message', 'update_order_status',
+    'delete_conversations', 'get_enduser_orders', 'get_company_orders', 'update_fcm_token',
     # executive
     'register_supplier_executive', 'login_supplier_executive', 'get_supplier_executives',
     'allocate_company_to_executive', 'get_allocated_companies', 'place_executive_order',

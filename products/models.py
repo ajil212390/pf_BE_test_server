@@ -287,3 +287,16 @@ class Commitment(models.Model):
     class Meta:
         db_table = 'commitment'
         managed = True
+
+
+class DeviceFCMToken(models.Model):
+    id = models.AutoField(primary_key=True)
+    user_id = models.IntegerField()
+    user_type = models.CharField(max_length=50)
+    fcm_token = models.CharField(max_length=500)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        managed = True
+        db_table = 'device_fcm_token'
+        unique_together = (('user_id', 'user_type'),)
