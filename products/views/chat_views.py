@@ -46,10 +46,13 @@ def get_company_conversations(request, company_id):
                 continue
             last_message = conv.messages.order_by('-timestamp').first()
             unread_count = conv.messages.filter(sender_type='enduser', is_read=False).count()
+            enduser_ph = str(getattr(conv.enduser, 'enduserphone', '') or "").strip()
             result.append({
                 'conversation_id': conv.id,
                 'enduser_id': conv.enduser.endsuerid,
                 'enduser_name': conv.enduser.endusername,
+                'enduser_phone': enduser_ph,
+                'phone': enduser_ph,
                 'updated_at': conv.updated_at,
                 'last_message': last_message.text_content if last_message else None,
                 'last_message_sender': last_message.sender_type if last_message else None,
@@ -133,10 +136,13 @@ def get_company_executive_conversations(request, company_id):
                 else:
                     supp_id = su.supplierid_id or su.supplieruserid
 
+            exec_ph = str(getattr(ex, 'executive_phone', '') or "").strip()
             result.append({
                 'conversation_id': conv.id,
                 'executive_id': ex.executiveid,
                 'executive_name': ex.executive_name,
+                'executive_phone': exec_ph,
+                'phone': exec_ph,
                 'is_allocated': is_allocated,
                 'supplier_id': supp_id,
                 'supplier_name': supp_name,
@@ -198,10 +204,16 @@ def get_enduser_conversations(request, enduser_id):
                 continue
             last_message = conv.messages.order_by('-timestamp').first()
             unread_count = conv.messages.filter(sender_type='company', is_read=False).count()
+            comp_ph = str(getattr(conv.company, 'companyphonenumber', '') or "").strip()
+            comp_ph = str(getattr(conv.company, 'companyphonenumber', '') or "").strip()
             result.append({
                 'conversation_id': conv.id,
                 'company_id': conv.company.companyid,
                 'company_name': conv.company.companyname,
+                'company_phone': comp_ph,
+                'phone': comp_ph,
+                'company_phone': comp_ph,
+                'phone': comp_ph,
                 'updated_at': conv.updated_at,
                 'last_message': last_message.text_content if last_message else None,
                 'last_message_sender': last_message.sender_type if last_message else None,
@@ -517,21 +529,19 @@ def send_order_message(request):
 
         buyer_name = conversation.enduser.endusername if conversation.enduser else 'Customer'
         note = (request.data.get('note') or '').strip()
-        order_text = f'🛒 New Order\nFrom: {buyer_name}\n\n'
+        order_text = chr(0x1F6CD) + chr(0xFE0F) + ' New Order\n\n'
         for item in cart_items:
             qty = item.get('qty', 1)
             name = item.get('name', 'Product')
-            price = item.get('price')
-            price_str = f' - ₹{price}' if price else ''
-            order_text += f'• {name} (x{qty}){price_str}\n'
+            order_text += chr(0x2022) + f" {name} (x{qty})\n"
         if note:
-            order_text += f'\n📝 Note: {note}\n'
+            order_text += f"\n\u0001F4DD Note: {note}\n"
         msg = ChatMessage.objects.create(
             conversation=conversation,
             sender_type='enduser',
-            text_content=order_text
+            text_content=order_text,
+            order_status='pending'
         )
-
         conversation.updated_at = msg.timestamp
         conversation.save()
 
@@ -616,14 +626,20 @@ def get_enduser_orders(request, enduser_id):
         messages = ChatMessage.objects.filter(
             conversation__enduser_id=enduser_id,
             conversation__conversation_type='customer'
-        ).filter(Q(text_content__contains='New Order') | Q(text_content__contains='🛍️')
-        ).select_related('conversation__company').order_by('-timestamp')
+        ).filter(
+            Q(text_content__contains='New Order') | Q(text_content__startswith='\U0001f6cd\ufe0f') | Q(text_content__startswith='\U0001f6d2')
+        ).exclude(
+            Q(text_content__contains='Order Bill') | Q(text_content__contains='\U0001f9fe')
+                ).select_related('conversation__company').order_by('-timestamp')
 
         orders = []
         for msg in messages:
+            comp_ph = str(getattr(msg.conversation.company, 'companyphonenumber', '') or "").strip() if msg.conversation.company else ''
             orders.append({
                 'id': msg.id,
                 'company_name': msg.conversation.company.companyname,
+                'company_phone': comp_ph,
+                'phone': comp_ph,
                 'text_content': msg.text_content,
                 'timestamp': msg.timestamp,
                 'order_status': msg.order_status,
@@ -643,19 +659,26 @@ def get_company_orders(request, company_id):
         messages = ChatMessage.objects.filter(
             conversation__company_id=company_id,
             conversation__conversation_type='customer'
-        ).filter(Q(text_content__contains='New Order') | Q(text_content__contains='🛍️')
-        ).select_related('conversation__enduser').order_by('-timestamp')
+        ).filter(
+            Q(text_content__contains='New Order') | Q(text_content__startswith='\U0001f6cd\ufe0f') | Q(text_content__startswith='\U0001f6d2')
+        ).exclude(
+            Q(text_content__contains='Order Bill') | Q(text_content__contains='\U0001f9fe')
+                ).select_related('conversation__enduser').order_by('-timestamp')
 
         orders = []
         for msg in messages:
+            enduser_ph = str(getattr(msg.conversation.enduser, 'enduserphone', '') or "").strip() if msg.conversation.enduser else ''
             orders.append({
                 'id': msg.id,
                 'enduser_name': msg.conversation.enduser.endusername if msg.conversation.enduser else 'Customer',
+                'enduser_phone': enduser_ph,
+                'phone': enduser_ph,
                 'text_content': msg.text_content,
                 'timestamp': msg.timestamp,
                 'order_status': msg.order_status,
                 'enduser_id': msg.conversation.enduser.endsuerid if msg.conversation.enduser else None,
                 'conversation_id': msg.conversation_id,
+                'company_id': company_id,
             })
 
         return Response(orders)
@@ -702,5 +725,65 @@ def update_fcm_token(request):
                     )
 
         return Response({'success': True, 'message': f'FCM token registered for {user_type} #{user_id}'})
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+def get_conversation_details(request, conversation_id=0):
+    try:
+        conv = None
+        if conversation_id and int(conversation_id) > 0:
+            conv = Conversation.objects.select_related('company', 'enduser', 'executive').filter(id=int(conversation_id)).first()
+
+        comp_id = request.GET.get('company_id')
+        enduser_id = request.GET.get('enduser_id')
+        exec_id = request.GET.get('executive_id')
+
+        comp_phone = ''
+        enduser_phone = ''
+        exec_phone = ''
+        comp_name = ''
+        enduser_name = ''
+        exec_name = ''
+
+        if conv:
+            if conv.company:
+                comp_phone = str(getattr(conv.company, 'companyphonenumber', '') or "").strip()
+                comp_name = conv.company.companyname or ''
+            if conv.enduser:
+                enduser_phone = str(getattr(conv.enduser, 'enduserphone', '') or "").strip()
+                enduser_name = conv.enduser.endusername or ''
+            if conv.executive:
+                exec_phone = str(getattr(conv.executive, 'executive_phone', '') or "").strip()
+                exec_name = conv.executive.executive_name or ''
+
+        if not comp_phone and comp_id:
+            c = Company.objects.filter(companyid=comp_id).first()
+            if c:
+                comp_phone = str(getattr(c, 'companyphonenumber', '') or "").strip()
+                comp_name = c.companyname or ''
+
+        if not enduser_phone and enduser_id:
+            eu = EndUser.objects.filter(endsuerid=enduser_id).first()
+            if eu:
+                enduser_phone = str(getattr(eu, 'enduserphone', '') or "").strip()
+                enduser_name = eu.endusername or ''
+
+        if not exec_phone and exec_id:
+            se = SupplierExecutive.objects.filter(executiveid=exec_id).first()
+            if se:
+                exec_phone = str(getattr(se, 'executive_phone', '') or "").strip()
+                exec_name = se.executive_name or ''
+
+        return Response({
+            'conversation_id': conv.id if conv else int(conversation_id or 0),
+            'company_phone': comp_phone,
+            'company_name': comp_name,
+            'enduser_phone': enduser_phone,
+            'enduser_name': enduser_name,
+            'executive_phone': exec_phone,
+            'executive_name': exec_name,
+        })
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

@@ -51,7 +51,7 @@ from .chat_views import (
     get_company_executive_conversations,
     get_enduser_conversations,
     get_executive_conversations,
-    get_conversation_messages,
+    get_conversation_messages, get_conversation_details,
     send_message,
     send_order_message,
     get_or_create_company_buyer_profile,
