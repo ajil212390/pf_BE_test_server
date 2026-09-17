@@ -484,6 +484,7 @@ def admin_user_customer_supplier_overview(request, user_id):
             'email': supplier.supplieremail or '',
             'address': supplier.supplieraddress or '',
             'location_coordinates': getattr(supplier, 'location_coordinates', None),
+            'isconnected': getattr(supplier, 'isconnected', 1),
             'bills_count': len(s_purchases),
             'bills_amount': s_purchases_amt,
             'debit_notes_count': len(s_notes),
