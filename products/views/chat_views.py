@@ -137,12 +137,14 @@ def get_company_executive_conversations(request, company_id):
                     supp_id = su.supplierid_id or su.supplieruserid
 
             exec_ph = str(getattr(ex, 'executive_phone', '') or "").strip()
+            coords = getattr(comp_supp, 'location_coordinates', None) or (getattr(su, 'location_coordinates', None) if su else None)
             result.append({
                 'conversation_id': conv.id,
                 'executive_id': ex.executiveid,
                 'executive_name': ex.executive_name,
                 'executive_phone': exec_ph,
                 'phone': exec_ph,
+                'location_coordinates': coords,
                 'is_allocated': is_allocated,
                 'supplier_id': supp_id,
                 'supplier_name': supp_name,

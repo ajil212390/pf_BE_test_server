@@ -195,3 +195,32 @@ def manage_supplier_products(request, supplier_id):
         return Response({'success': True, 'message': 'Supplier products updated successfully'}, status=status.HTTP_200_OK)
     except Supplier.DoesNotExist:
         return Response({'error': 'Supplier not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+def get_product_suppliers(request, product_id):
+    """Return all suppliers associated with / supplying a specific product."""
+    try:
+        from products.models import SupplierProduct, Supplier
+        supplier_products = SupplierProduct.objects.filter(product_id=product_id).select_related('supplier')
+        suppliers_data = []
+        seen_ids = set()
+        for sp in supplier_products:
+            if sp.supplier and sp.supplier.supplierid not in seen_ids:
+                s = sp.supplier
+                seen_ids.add(s.supplierid)
+                suppliers_data.append({
+                    'id': s.supplierid,
+                    'name': s.suppliername,
+                    'phone': s.supplierphonenumber or '',
+                    'address': s.supplieraddress or '',
+                    'email': s.supplieremail or '',
+                    'gst_number': s.suppliergst or '',
+                    'price': float(sp.supplier_price) if sp.supplier_price is not None else None,
+                    'is_active': sp.is_active,
+                    'is_connected': s.isconnected,
+                    'location_coordinates': s.location_coordinates or '',
+                })
+        return Response({'success': True, 'suppliers': suppliers_data}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'success': False, 'error': str(e), 'suppliers': []}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

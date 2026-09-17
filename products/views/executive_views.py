@@ -52,10 +52,10 @@ def parse_lat_lng(location_str):
 def register_supplier_executive(request):
     data = request.data
     manager_id = data.get('manager_id')
-    name = data.get('executive_name')
-    username = data.get('executive_username')
-    password = data.get('executive_password')
-    phone = data.get('executive_phone')
+    name = data.get('executive_name') or data.get('name')
+    username = data.get('executive_username') or data.get('username')
+    password = data.get('executive_password') or data.get('password')
+    phone = data.get('executive_phone') or data.get('phone')
 
     try:
         manager = SupplierManager.objects.get(manager_id=manager_id)
@@ -194,6 +194,7 @@ def get_allocated_companies(request, executive_id):
                         supplierphonenumber=supp_user.supplieruserphone,
                         suppliergst=getattr(supp_user, 'supplierusergst', '') or getattr(supp_user, 'supplierusergstnumber', '') or '',
                         supplieraddress=getattr(supp_user, 'supplieruseraddress', '') or '',
+                        location_coordinates=getattr(supp_user, 'location_coordinates', None),
                     )
 
             result.append({
@@ -253,6 +254,7 @@ def place_executive_order(request):
                 supplierphonenumber=supp_user.supplieruserphone,
                 suppliergst=getattr(supp_user, 'supplierusergst', '') or getattr(supp_user, 'supplierusergstnumber', '') or '',
                 supplieraddress=getattr(supp_user, 'supplieruseraddress', '') or '',
+                location_coordinates=getattr(supp_user, 'location_coordinates', None),
             )
 
         if not supplier:

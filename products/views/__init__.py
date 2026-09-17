@@ -39,11 +39,12 @@ from .supplier_views import (
     supplier_bills,
     supplier_dashboard,
     onboard_supplier,
+    get_available_suppliers,
 )
 
 from .supplier_product_views import (
     get_supplier_products,
-    manage_supplier_products,
+    manage_supplier_products, get_product_suppliers,
 )
 
 from .chat_views import (
@@ -97,7 +98,7 @@ __all__ = [
     'ProductViewSet', 'ProductCategoryViewSet', 'ProductUnitViewSet',
     # supplier
     'search_supplier_globally', 'search_local_supplier', 'connect_supplier',
-    'supplier_bills', 'supplier_dashboard', 'onboard_supplier',
+    'supplier_bills', 'supplier_dashboard', 'onboard_supplier', 'get_available_suppliers',
     'get_supplier_products', 'manage_supplier_products',
     # chat
     'get_company_conversations', 'get_company_executive_conversations', 'get_enduser_conversations', 'get_executive_conversations', 'get_conversation_messages',

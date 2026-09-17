@@ -9,7 +9,7 @@ from .views import (
     admin_user_products, admin_company_products,
     admin_user_customer_supplier_overview,
     register_enduser, login_enduser, login_supplier,
-    search_supplier_globally, search_local_supplier, connect_supplier, supplier_bills, onboard_supplier, supplier_dashboard,
+    search_supplier_globally, search_local_supplier, get_available_suppliers, connect_supplier, supplier_bills, onboard_supplier, supplier_dashboard,
     get_company_conversations, get_company_executive_conversations, get_enduser_conversations, get_executive_conversations, get_conversation_messages, get_conversation_details, send_message, send_order_message, get_or_create_company_buyer_profile, delete_message, update_order_status,
     delete_conversations, get_enduser_orders, get_company_orders,
     register_supplier_executive, login_supplier_executive,
@@ -19,7 +19,7 @@ from .views import (
     register_supplier_manager, login_supplier_manager,
     get_supplier_managers, get_manager_dashboard, delete_supplier_manager,
     delete_supplier_executive,
-    get_supplier_products, manage_supplier_products,
+    get_supplier_products, manage_supplier_products, get_product_suppliers,
     update_fcm_token,
 )
 
@@ -47,6 +47,7 @@ urlpatterns = [
     path('register-enduser/', register_enduser),
     path('login-enduser/', login_enduser),
     path('login-supplier/', login_supplier),
+    path('supplier/available/', get_available_suppliers),
     path('supplier/search/', search_supplier_globally),
     path('supplier/search-local/', search_local_supplier),
     path('supplier/connect/', connect_supplier),
@@ -54,6 +55,7 @@ urlpatterns = [
     path('supplier/<int:supplier_user_id>/bills/', supplier_bills),
     path('supplier/<int:supplier_user_id>/dashboard/', supplier_dashboard),
     path('supplier/<int:supplier_id>/products/', get_supplier_products),
+    path('products/<int:product_id>/suppliers/', get_product_suppliers),
     path('supplier/<int:supplier_id>/products/manage/', manage_supplier_products),
     
     # Chat Endpoints

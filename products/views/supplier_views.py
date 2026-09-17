@@ -98,12 +98,34 @@ def search_supplier_globally(request):
 def search_local_supplier(request):
     phone = request.GET.get('phone')
     gstn = request.GET.get('gstn')
+    company_user_id = (
+        request.GET.get('company_id') or
+        request.GET.get('user_id') or
+        request.GET.get('userid') or
+        request.GET.get('companyid')
+    )
+
+    # Resolve company from user_id if provided
+    company = None
+    if company_user_id:
+        try:
+            user_obj = Users.objects.select_related('companyid').get(userid=company_user_id)
+            company = user_obj.companyid
+        except Users.DoesNotExist:
+            try:
+                company = Company.objects.get(companyid=company_user_id)
+            except Company.DoesNotExist:
+                pass
 
     supplier = None
+    qs = Supplier.objects.all()
+    if company:
+        qs = qs.filter(companyid=company)
+
     if phone:
-        supplier = Supplier.objects.filter(supplierphonenumber=phone).first()
+        supplier = qs.filter(supplierphonenumber=phone).first()
     elif gstn:
-        supplier = Supplier.objects.filter(suppliergst=gstn).first()
+        supplier = qs.filter(suppliergst=gstn).first()
 
     if supplier:
         return Response({
@@ -496,9 +518,16 @@ def onboard_supplier(request):
                     )
                 else:
                     # Mark existing local supplier as connected
+                    update_fields = []
                     if not local_supplier.isconnected:
                         local_supplier.isconnected = 1
-                        local_supplier.save(update_fields=['isconnected'])
+                        update_fields.append('isconnected')
+                    coords = data.get('location_coordinates') or getattr(supplier_user, 'location_coordinates', None)
+                    if coords and local_supplier.location_coordinates != coords:
+                        local_supplier.location_coordinates = coords
+                        update_fields.append('location_coordinates')
+                    if update_fields:
+                        local_supplier.save(update_fields=update_fields)
                 # Link the SupplierUser to the local Supplier via FK
                 supplier_user.supplierid = local_supplier
                 supplier_user.save(update_fields=['supplierid'])
@@ -589,3 +618,102 @@ def bill_commitments_view(request, bill_no=None):
         commitments = Commitment.objects.filter(bill_no=b_no).order_by('-created_at')
         serializer = CommitmentSerializer(commitments, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    parameters=[
+        OpenApiParameter(name="user_id", description="Company / User ID", required=False, type=OpenApiTypes.INT),
+        OpenApiParameter(name="company_id", description="Company ID", required=False, type=OpenApiTypes.INT),
+        OpenApiParameter(name="search", description="Search query", required=False, type=OpenApiTypes.STR),
+    ],
+    responses={200: OpenApiResponse(description="List of available unconnected suppliers")}
+)
+@api_view(['GET'])
+def get_available_suppliers(request):
+    company_user_id = request.GET.get('userid') or request.GET.get('user_id') or request.GET.get('companyid') or request.GET.get('company_id')
+    query = request.GET.get('search') or request.GET.get('query') or ''
+
+    company = None
+    if company_user_id:
+        try:
+            user_obj = Users.objects.select_related('companyid').get(userid=company_user_id)
+            company = user_obj.companyid
+        except Users.DoesNotExist:
+            company = Company.objects.filter(companyid=company_user_id).first()
+
+    connected_phones = set()
+    connected_gsts = set()
+    connected_ids = set()
+
+    if company:
+        connected_suppliers = Supplier.objects.filter(companyid=company, isconnected=1)
+        connected_phones = {s.supplierphonenumber for s in connected_suppliers if s.supplierphonenumber}
+        connected_gsts = {s.suppliergst for s in connected_suppliers if s.suppliergst}
+        connected_ids = {s.supplierid for s in connected_suppliers}
+
+    all_suppliers = Supplieruser.objects.all()
+    if query.strip():
+        q_str = query.strip()
+        all_suppliers = all_suppliers.filter(
+            Q(suppliername__icontains=q_str) |
+            Q(supplierusername__icontains=q_str) |
+            Q(supplieruserphone__icontains=q_str) |
+            Q(supplierusergstnumber__icontains=q_str) |
+            Q(supplieruseraddress__icontains=q_str)
+        )
+
+    result = []
+    for su in all_suppliers:
+        is_conn = False
+        if su.supplieruserphone and su.supplieruserphone in connected_phones:
+            is_conn = True
+        elif su.supplierusergstnumber and su.supplierusergstnumber in connected_gsts:
+            is_conn = True
+        elif su.supplierid_id and su.supplierid_id in connected_ids:
+            is_conn = True
+
+        if company and is_conn:
+            continue
+
+        result.append({
+            'id': su.supplieruserid,
+            'supplier_id': su.supplierid_id,
+            'name': su.suppliername or su.supplierusername or 'Supplier',
+            'phone': su.supplieruserphone or '',
+            'gst_number': su.supplierusergstnumber or '',
+            'email': su.supplieruseremail or '',
+            'address': su.supplieruseraddress or '',
+            'location_coordinates': getattr(su, 'location_coordinates', None),
+            'is_connected': is_conn,
+        })
+
+    return Response(result, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+def get_product_suppliers(request, product_id):
+    """Return all suppliers associated with / supplying a specific product."""
+    try:
+        from products.models import SupplierProduct, Supplier
+        supplier_products = SupplierProduct.objects.filter(product_id=product_id).select_related('supplier')
+        suppliers_data = []
+        seen_ids = set()
+        for sp in supplier_products:
+            if sp.supplier and sp.supplier.supplierid not in seen_ids:
+                s = sp.supplier
+                seen_ids.add(s.supplierid)
+                suppliers_data.append({
+                    'id': s.supplierid,
+                    'name': s.suppliername,
+                    'phone': s.supplierphonenumber or '',
+                    'address': s.supplieraddress or '',
+                    'email': s.supplieremail or '',
+                    'gst_number': s.suppliergst or '',
+                    'price': float(sp.supplier_price) if sp.supplier_price is not None else None,
+                    'is_active': sp.is_active,
+                    'is_connected': s.isconnected,
+                    'location_coordinates': s.location_coordinates or '',
+                })
+        return Response({'success': True, 'suppliers': suppliers_data}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({'success': False, 'error': str(e), 'suppliers': []}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
