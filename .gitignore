@@ -1,0 +1,22 @@
+# Environment and credentials
+.env
+.env.*
+!.env.example
+serviceAccountKey.json
+**/serviceAccountKey.json
+*.pem
+*.p12
+*.key
+*credentials*.json
+*secret*.json
+*token*.json
+
+# Local Python and Django files
+venv/
+__pycache__/
+*.py[cod]
+db.sqlite3
+
+# Local generated files
+media/
+*.xlsx
