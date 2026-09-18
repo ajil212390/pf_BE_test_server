@@ -104,31 +104,39 @@ def _allocate_payments_to_bills(regular_bills, payment_bills):
 
 @api_view(['GET'])
 def admin_overview(request):
-    """Returns high-level counts – excludes the built-in admin account."""
+    """Returns high-level counts — excludes the built-in admin account."""
     total_companies = Company.objects.exclude(companyname__iexact=ADMIN_COMPANY).count()
     total_users     = Users.objects.exclude(username__iexact=ADMIN_USERNAME).count()
     total_products  = Products.objects.count()
+    total_suppliers = Supplier.objects.count()
+    total_connected_suppliers = Supplier.objects.filter(isconnected=1).count()
     return Response({
-        'total_companies': total_companies,
-        'total_users':     total_users,
-        'total_products':  total_products,
+        'total_companies':           total_companies,
+        'total_users':               total_users,
+        'total_products':            total_products,
+        'total_suppliers':           total_suppliers,
+        'total_connected_suppliers': total_connected_suppliers,
     })
 
 
 @api_view(['GET'])
 def admin_companies(request):
-    """Returns all companies except Admin HQ, with user & product counts."""
+    """Returns all companies except Admin HQ, with user, product & supplier counts."""
     companies = Company.objects.exclude(companyname__iexact=ADMIN_COMPANY)
     result = []
     for c in companies:
         user_count = Users.objects.filter(companyid=c).exclude(username__iexact=ADMIN_USERNAME).count()
         product_count = Products.objects.filter(companyid=c).count()
+        supplier_count = Supplier.objects.filter(companyid=c).count()
+        connected_supplier_count = Supplier.objects.filter(companyid=c, isconnected=1).count()
         result.append({
-            'companyid':           c.companyid,
-            'companyname':         c.companyname,
-            'companyphonenumber':  str(c.companyphonenumber) if c.companyphonenumber else '',
-            'user_count':          user_count,
-            'product_count':       product_count,
+            'companyid':                c.companyid,
+            'companyname':              c.companyname,
+            'companyphonenumber':       str(c.companyphonenumber) if c.companyphonenumber else '',
+            'user_count':               user_count,
+            'product_count':            product_count,
+            'supplier_count':           supplier_count,
+            'connected_supplier_count': connected_supplier_count,
         })
     return Response(result)
 
@@ -554,3 +562,45 @@ def admin_company_products(request, company_id):
         'total':      len(result),
         'products':   result,
     })
+
+
+@api_view(['GET'])
+def admin_suppliers(request):
+    """Returns all suppliers with connected status, company name, contact, and financials.
+    Supports optional ?company_id= and ?connected= query parameters."""
+    company_id = request.GET.get('company_id')
+    connected_param = request.GET.get('connected')
+
+    suppliers = Supplier.objects.select_related('companyid').all()
+
+    if company_id:
+        suppliers = suppliers.filter(companyid_id=company_id)
+
+    if connected_param is not None and connected_param != '':
+        is_conn = 1 if connected_param in ['1', 'true', 'True'] else 0
+        suppliers = suppliers.filter(isconnected=is_conn)
+
+    suppliers = suppliers.order_by('-isconnected', 'suppliername')
+
+    result = []
+    for s in suppliers:
+        bill_count = SupplierBill.objects.filter(supplierid=s).count()
+        result.append({
+            'supplierid':           s.supplierid,
+            'suppliername':         s.suppliername,
+            'supplierphonenumber':  s.supplierphonenumber or '',
+            'supplieremail':        s.supplieremail or '',
+            'supplieraddress':      s.supplieraddress or '',
+            'supplierpincode':      s.supplierpincode or '',
+            'suppliergst':          s.suppliergst or '',
+            'supplierstate':        s.supplierstate or '',
+            'supplierpanno':        s.supplierpanno or '',
+            'isconnected':          int(s.isconnected or 0),
+            'companyid':            s.companyid.companyid if s.companyid else None,
+            'companyname':          s.companyid.companyname if s.companyid else '',
+            'suppliercurrentbal':   float(s.suppliercurrentbal or 0.0),
+            'supplieropeningbal':   float(s.supplieropeningbal or 0.0),
+            'location_coordinates': s.location_coordinates or '',
+            'bill_count':           bill_count,
+        })
+    return Response(result)

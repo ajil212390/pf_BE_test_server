@@ -19,6 +19,7 @@ from .admin_views import (
     admin_user_products,
     admin_user_customer_supplier_overview,
     admin_company_products,
+    admin_suppliers,
 )
 
 from .company_views import (
@@ -91,7 +92,7 @@ __all__ = [
     'register_user', 'login_user', 'update_company', 'change_password',
     # admin
     'admin_overview', 'admin_companies', 'admin_users', 'admin_products',
-    'admin_user_products', 'admin_user_customer_supplier_overview', 'admin_company_products',
+    'admin_user_products', 'admin_user_customer_supplier_overview', 'admin_company_products', 'admin_suppliers',
     # company
     'CompanyViewSet', 'CompanyCategoryViewSet',
     # product
