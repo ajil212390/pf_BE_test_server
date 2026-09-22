@@ -286,18 +286,22 @@ def get_conversation_messages(request, conversation_id):
     Fetches all messages in a conversation and marks incoming messages as read.
     """
     try:
-        sender_type = request.GET.get('sender_type')
-        if sender_type:
-            if sender_type == 'company':
-                ChatMessage.objects.filter(
-                    conversation_id=conversation_id
-                ).exclude(sender_type='company').filter(is_read=False).update(is_read=True)
-            else:
-                ChatMessage.objects.filter(
-                    conversation_id=conversation_id,
-                    sender_type='company',
-                    is_read=False
-                ).update(is_read=True)
+        sender_type = (request.GET.get('sender_type') or '').strip().lower()
+        if sender_type in ['supplier', 'manager'] or request.GET.get('is_supervisor') == 'true':
+            ChatMessage.objects.filter(
+                conversation_id=conversation_id,
+                is_read=False
+            ).update(is_read=True)
+        elif sender_type == 'company':
+            ChatMessage.objects.filter(
+                conversation_id=conversation_id
+            ).exclude(sender_type='company').filter(is_read=False).update(is_read=True)
+        elif sender_type:
+            ChatMessage.objects.filter(
+                conversation_id=conversation_id,
+                sender_type='company',
+                is_read=False
+            ).update(is_read=True)
 
         messages = ChatMessage.objects.filter(conversation_id=conversation_id).order_by('timestamp')
         result = []
@@ -562,7 +566,12 @@ def send_order_message(request):
 @api_view(['DELETE'])
 def delete_message(request, message_id):
     try:
+        sender_type = (request.GET.get('sender_type') or request.data.get('sender_type') or '').strip().lower()
+        if sender_type == 'executive' or request.GET.get('is_executive') == 'true':
+            return Response({'error': 'Supplier executives are not permitted to delete sent messages.'}, status=status.HTTP_403_FORBIDDEN)
         msg = ChatMessage.objects.get(id=message_id)
+        if sender_type == 'executive':
+            return Response({'error': 'Supplier executives are not permitted to delete sent messages.'}, status=status.HTTP_403_FORBIDDEN)
         msg.delete()
         return Response({'success': True, 'message': 'Message deleted completely.'})
     except ChatMessage.DoesNotExist:
@@ -787,5 +796,99 @@ def get_conversation_details(request, conversation_id=0):
             'executive_phone': exec_phone,
             'executive_name': exec_name,
         })
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+@api_view(['GET'])
+def get_supplier_monitored_conversations(request, supplier_user_id):
+    """
+    Returns all executive-to-company conversations under this supplier for supervisory monitoring.
+    """
+    try:
+        from ..models import SupplierExecutive
+        executives = SupplierExecutive.objects.filter(
+            Q(supplier_user_id=supplier_user_id) | Q(manager__supplier_user_id=supplier_user_id)
+        ).select_related('manager')
+
+        exec_ids = list(executives.values_list('executiveid', flat=True))
+
+        conversations = Conversation.objects.filter(
+            executive_id__in=exec_ids
+        ).select_related('company', 'executive', 'executive__manager').order_by('-updated_at')
+
+        result = []
+        for conv in conversations:
+            if not conv.company or not conv.executive:
+                continue
+            last_message = conv.messages.order_by('-timestamp').first()
+            unread_count = conv.messages.filter(is_read=False).count()
+            has_audio = (last_message.audio_file is not None and bool(last_message.audio_file)) if last_message else False
+            
+            exec_obj = conv.executive
+            mgr_name = exec_obj.manager.manager_name if (exec_obj and exec_obj.manager) else ''
+
+            result.append({
+                'conversation_id': conv.id,
+                'company_id': conv.company.companyid,
+                'company_name': conv.company.companyname,
+                'company_phone': str(getattr(conv.company, 'companyphonenumber', '') or ''),
+                'executive_id': exec_obj.executiveid,
+                'executive_name': exec_obj.executive_name,
+                'executive_phone': str(getattr(exec_obj, 'executive_phone', '') or ''),
+                'manager_name': mgr_name,
+                'updated_at': conv.updated_at.isoformat() if conv.updated_at else None,
+                'last_message': last_message.text_content if last_message else None,
+                'last_message_sender': last_message.sender_type if last_message else None,
+                'has_audio': has_audio,
+                'is_read': last_message.is_read if last_message else True,
+                'unread_count': unread_count,
+            })
+        return Response(result)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+def get_manager_monitored_conversations(request, manager_id):
+    """
+    Returns all executive-to-company conversations under this manager for supervisory monitoring.
+    """
+    try:
+        from ..models import SupplierExecutive
+        executives = SupplierExecutive.objects.filter(manager_id=manager_id).select_related('manager')
+        exec_ids = list(executives.values_list('executiveid', flat=True))
+
+        conversations = Conversation.objects.filter(
+            executive_id__in=exec_ids
+        ).select_related('company', 'executive', 'executive__manager').order_by('-updated_at')
+
+        result = []
+        for conv in conversations:
+            if not conv.company or not conv.executive:
+                continue
+            last_message = conv.messages.order_by('-timestamp').first()
+            unread_count = conv.messages.filter(is_read=False).count()
+            has_audio = (last_message.audio_file is not None and bool(last_message.audio_file)) if last_message else False
+
+            exec_obj = conv.executive
+            result.append({
+                'conversation_id': conv.id,
+                'company_id': conv.company.companyid,
+                'company_name': conv.company.companyname,
+                'company_phone': str(getattr(conv.company, 'companyphonenumber', '') or ''),
+                'executive_id': exec_obj.executiveid,
+                'executive_name': exec_obj.executive_name,
+                'executive_phone': str(getattr(exec_obj, 'executive_phone', '') or ''),
+                'manager_name': exec_obj.manager.manager_name if exec_obj.manager else '',
+                'updated_at': conv.updated_at.isoformat() if conv.updated_at else None,
+                'last_message': last_message.text_content if last_message else None,
+                'last_message_sender': last_message.sender_type if last_message else None,
+                'has_audio': has_audio,
+                'is_read': last_message.is_read if last_message else True,
+                'unread_count': unread_count,
+            })
+        return Response(result)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

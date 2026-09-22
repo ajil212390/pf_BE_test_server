@@ -64,6 +64,8 @@ from .chat_views import (
     get_enduser_orders,
     get_company_orders,
     update_fcm_token,
+    get_supplier_monitored_conversations,
+    get_manager_monitored_conversations,
 )
 
 from .executive_views import (

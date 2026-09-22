@@ -21,6 +21,7 @@ from .views import (
     delete_supplier_executive,
     get_supplier_products, manage_supplier_products, get_product_suppliers,
     update_fcm_token,
+    get_supplier_monitored_conversations, get_manager_monitored_conversations,
 )
 
 router = DefaultRouter()
@@ -76,6 +77,8 @@ urlpatterns = [
     path('chat/company-buyer-profile/', get_or_create_company_buyer_profile),
     path('chat/orders/enduser/<int:enduser_id>/', get_enduser_orders),
     path('chat/orders/company/<int:company_id>/', get_company_orders),
+    path('chat/supplier-monitor/<int:supplier_user_id>/', get_supplier_monitored_conversations),
+    path('chat/manager-monitor/<int:manager_id>/', get_manager_monitored_conversations),
     
     # Supplier Executive Endpoints
     path('supplier/executives/register/', register_supplier_executive),
