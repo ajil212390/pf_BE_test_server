@@ -1,5 +1,5 @@
-# This package re-exports every symbol that products/urls.py imports,
-# so urls.py requires zero changes after the views.py → views/ split.
+﻿# This package re-exports every symbol that products/urls.py imports,
+# so urls.py requires zero changes after the views.py â†’ views/ split.
 
 from .auth_views import (
     register_enduser,
@@ -20,6 +20,7 @@ from .admin_views import (
     admin_user_customer_supplier_overview,
     admin_company_products,
     admin_suppliers,
+    get_enduser_store_bills_summary,
 )
 
 from .company_views import (
@@ -92,7 +93,7 @@ __all__ = [
     'register_user', 'login_user', 'update_company', 'change_password',
     # admin
     'admin_overview', 'admin_companies', 'admin_users', 'admin_products',
-    'admin_user_products', 'admin_user_customer_supplier_overview', 'admin_company_products', 'admin_suppliers',
+    'admin_user_products', 'admin_user_customer_supplier_overview', 'admin_company_products', 'admin_suppliers', 'get_enduser_store_bills_summary',
     # company
     'CompanyViewSet', 'CompanyCategoryViewSet',
     # product
@@ -113,3 +114,4 @@ __all__ = [
     'register_supplier_manager', 'login_supplier_manager', 'get_supplier_managers',
     'get_manager_dashboard', 'delete_supplier_manager',
 ]
+

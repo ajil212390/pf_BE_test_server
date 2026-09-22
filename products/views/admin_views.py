@@ -604,3 +604,59 @@ def admin_suppliers(request):
             'bill_count':           bill_count,
         })
     return Response(result)
+
+@api_view(['GET'])
+def get_enduser_store_bills_summary(request, enduser_id):
+    """
+    Returns store bills summary for an enduser by matching their phone number
+    with customer records across all stores.
+    """
+    import re
+    from ..models import EndUser
+
+    try:
+        enduser = EndUser.objects.get(endsuerid=enduser_id)
+    except EndUser.DoesNotExist:
+        return Response({'error': 'Enduser not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    phone = (enduser.enduserphone or '').strip()
+    if not phone:
+        return Response([], status=status.HTTP_200_OK)
+
+    digits = re.sub(r'[^0-9]', '', phone)
+    last10 = digits[-10:] if len(digits) >= 10 else digits
+    if not last10:
+        return Response([], status=status.HTTP_200_OK)
+
+    customers = Customer.objects.filter(customerphonenumber__icontains=last10).select_related('companyid')
+
+    store_summaries = []
+    for customer in customers:
+        company = customer.companyid
+        c_entry_bills = CustomerBill.objects.filter(customerid=customer)
+        c_sales = [b for b in c_entry_bills if not _is_note_entry(b.customerbilltype) and not _is_payment_entry(b.customerbilltype, b.customerbillno)]
+        c_notes = [b for b in c_entry_bills if _is_note_entry(b.customerbilltype)]
+        c_pays = [b for b in c_entry_bills if _is_payment_entry(b.customerbilltype, b.customerbillno)]
+
+        c_sales_amt = sum(float(b.customerbillamount or 0) for b in c_sales)
+        c_notes_amt = sum(float(b.customerbillamount or 0) for b in c_notes)
+        c_paid_amt = sum(float(b.customerbillamount or 0) for b in c_pays)
+        c_outstanding = (c_sales_amt - c_notes_amt) - c_paid_amt
+
+        store_summaries.append({
+            'company_id': company.companyid if company else None,
+            'company_name': company.companyname if company else 'Store',
+            'company_phone': company.companyphonenumber or '' if company else '',
+            'company_address': company.companyaddress or '' if company else '',
+            'customer_id': customer.customerid,
+            'customer_name': customer.customername,
+            'bills_count': len(c_sales),
+            'bills_amount': c_sales_amt,
+            'credit_notes_count': len(c_notes),
+            'credit_notes_amount': c_notes_amt,
+            'gross_bill_amount': c_sales_amt - c_notes_amt,
+            'paid_amount': c_paid_amt,
+            'balance_amount': c_outstanding,
+        })
+
+    return Response(store_summaries, status=status.HTTP_200_OK)

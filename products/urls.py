@@ -1,4 +1,4 @@
-from .views.supplier_views import bill_commitments_view
+﻿from .views.supplier_views import bill_commitments_view
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
@@ -6,7 +6,7 @@ from .views import (
     CompanyViewSet, CompanyCategoryViewSet,
     register_user, login_user, update_company, change_password,
     admin_overview, admin_companies, admin_users, admin_products,
-    admin_user_products, admin_company_products, admin_suppliers,
+    admin_user_products, admin_company_products, admin_suppliers, get_enduser_store_bills_summary,
     admin_user_customer_supplier_overview,
     register_enduser, login_enduser, login_supplier,
     search_supplier_globally, search_local_supplier, get_available_suppliers, connect_supplier, supplier_bills, onboard_supplier, supplier_dashboard,
@@ -46,6 +46,7 @@ urlpatterns = [
     path('admin/suppliers/', admin_suppliers),
     path('update-fcm-token/', update_fcm_token),
     path('register-enduser/', register_enduser),
+    path('enduser/<int:enduser_id>/store-bills-summary/', get_enduser_store_bills_summary),
     path('login-enduser/', login_enduser),
     path('login-supplier/', login_supplier),
     path('supplier/available/', get_available_suppliers),
