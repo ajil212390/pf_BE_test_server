@@ -1,4 +1,4 @@
-﻿# This package re-exports every symbol that products/urls.py imports,
+# This package re-exports every symbol that products/urls.py imports,
 # so urls.py requires zero changes after the views.py â†’ views/ split.
 
 from .auth_views import (
@@ -66,6 +66,8 @@ from .chat_views import (
     update_fcm_token,
     get_supplier_monitored_conversations,
     get_manager_monitored_conversations,
+    update_supplier_order_status,
+    delete_supplier_order,
 )
 
 from .executive_views import (
@@ -107,7 +109,7 @@ __all__ = [
     # chat
     'get_company_conversations', 'get_company_executive_conversations', 'get_enduser_conversations', 'get_executive_conversations', 'get_conversation_messages',
     'send_message', 'send_order_message', 'get_or_create_company_buyer_profile', 'delete_message', 'update_order_status',
-    'delete_conversations', 'get_enduser_orders', 'get_company_orders', 'update_fcm_token',
+    'delete_conversations', 'get_enduser_orders', 'get_company_orders', 'update_fcm_token', 'update_supplier_order_status', 'delete_supplier_order',
     # executive
     'register_supplier_executive', 'login_supplier_executive', 'get_supplier_executives',
     'allocate_company_to_executive', 'get_allocated_companies', 'place_executive_order',

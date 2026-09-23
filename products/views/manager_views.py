@@ -1,8 +1,9 @@
-﻿from rest_framework import status
+from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from ..models import (
+    ChatMessage,
     SupplierManager,
     SupplierExecutive,
     SupplierOrder,
@@ -150,8 +151,12 @@ def get_manager_dashboard(request, manager_id):
                     'quantity': item.quantity,
                     'price': float(item.price_at_order),
                 })
+            is_company_order = ChatMessage.objects.filter(text_content__contains=f'[ref:#{o.order_id}]').exists() or (o.gps_latitude is None and o.gps_longitude is None)
             recent_orders.append({
                 'order_id': o.order_id,
+                'order_source': 'company' if is_company_order else 'field_executive',
+                'is_company_order': is_company_order,
+                'source_label': 'Order from Company' if is_company_order else 'Field Visit',
                 'company_name': o.company.companyname if o.company else 'N/A',
                 'executive_name': o.executive.executive_name if o.executive else 'N/A',
                 'total_amount': float(o.total_amount),

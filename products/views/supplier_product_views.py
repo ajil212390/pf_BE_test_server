@@ -125,7 +125,9 @@ def get_supplier_products(request, supplier_id):
         ).select_related('product', 'product__productcategoryid', 'product__productunitid')
 
         if company_id:
-            queryset = queryset.filter(company_id=company_id)
+            c_qs = queryset.filter(company_id=company_id)
+            if c_qs.exists():
+                queryset = c_qs
 
         data = []
         for sp in queryset:

@@ -8,7 +8,7 @@ from ..models import (
     SupplierProduct,
     Company, Supplier, Supplieruser, SupplierBill,
     SupplierExecutive, SupplierManager, ExecutiveAllocation,
-    SupplierOrder, SupplierOrderItem, Products, Users,
+    SupplierOrder, SupplierOrderItem, Products, Users, ChatMessage,
 )
 from django.db.models import Q
 from django.db import transaction
@@ -352,9 +352,14 @@ def get_supplier_manager_orders(request, manager_id):
                 else:
                     is_verified = True
 
+            is_company_order = ChatMessage.objects.filter(text_content__contains=f'[ref:#{o.order_id}]').exists() or (o.gps_latitude is None and o.gps_longitude is None)
+
             result.append({
                 'order_id': o.order_id,
                 'company_id': o.company_id,
+                'order_source': 'company' if is_company_order else 'field_executive',
+                'is_company_order': is_company_order,
+                'source_label': 'Order from Company' if is_company_order else 'Field Visit',
                 'company_name': o.company.companyname if o.company else 'N/A',
                 'supplier_id': o.supplier_id,
                 'supplier_name': o.supplier.suppliername if o.supplier else 'N/A',
@@ -445,9 +450,14 @@ def get_executive_orders(request, executive_id):
                 else:
                     is_verified = True
 
+            is_company_order = ChatMessage.objects.filter(text_content__contains=f'[ref:#{o.order_id}]').exists() or (o.gps_latitude is None and o.gps_longitude is None)
+
             result.append({
                 'order_id': o.order_id,
                 'company_id': o.company_id,
+                'order_source': 'company' if is_company_order else 'field_executive',
+                'is_company_order': is_company_order,
+                'source_label': 'Order from Company' if is_company_order else 'Field Visit',
                 'company_name': o.company.companyname if o.company else 'N/A',
                 'supplier_id': o.supplier_id,
                 'supplier_name': o.supplier.suppliername if o.supplier else 'N/A',

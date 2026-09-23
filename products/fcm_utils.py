@@ -206,11 +206,33 @@ def notify_chat_message(conversation, sender_type, text_content=None, has_audio=
 # Format: Title = Buyer Name (TOP), Body = Order notice (BELOW)
 def notify_new_order(conversation, cart_summary):
     try:
+        if conversation.executive_id:
+            company_name = conversation.company.companyname if conversation.company else 'Store'
+            title = company_name
+            order_body = chr(0x1F6CD) + chr(0xFE0F) + " Placed a new order\nTap to view details and accept."
+            order_data = {
+                'type': 'order',
+                'conversation_id': str(conversation.id),
+                'company_id': str(conversation.company_id),
+                'executive_id': str(conversation.executive_id),
+                'sender_name': company_name,
+                'title_name': company_name,
+                'sender_type': 'company',
+            }
+            send_push_to_user(
+                user_id=conversation.executive_id,
+                user_type='executive',
+                title=title,
+                body=order_body,
+                data=order_data
+            )
+            return
+
         buyer_name = conversation.enduser.endusername if conversation.enduser else 'Customer'
         company_id = conversation.company_id
         if company_id:
-            title = buyer_name # BUYER NAME ON TOP
-            order_body = "ðŸ›ï¸ Placed a new order\nTap to view details and accept."
+            title = buyer_name
+            order_body = chr(0x1F6CD) + chr(0xFE0F) + " Placed a new order\nTap to view details and accept."
             order_data = {
                 'type': 'order',
                 'conversation_id': str(conversation.id),
@@ -230,28 +252,59 @@ def notify_new_order(conversation, cart_summary):
     except Exception as e:
         _safe_log(f"[FCM] notify_new_order error: {e}")
 
+
 # 3. ORDER STATUS NOTIFICATION
 # Format: Title = Company Name (TOP), Body = Status (BELOW)
 def notify_order_status(conversation, status_val):
     try:
-        if not conversation or not conversation.enduser_id:
+        if not conversation:
             return
-        company_name = conversation.company.companyname if conversation.company else 'Store'
-        title = company_name # COMPANY NAME ON TOP
+
         status_clean = str(status_val).lower().strip()
         if status_clean == 'accepted':
-            body = "âœ… Accepted your order\nThe store is preparing your invoice."
+            body = "\u2705 Accepted your order"
             notif_type = 'order_accepted'
         elif status_clean == 'declined':
-            body = "âŒ Declined your order"
+            body = "\u274c Declined your order"
             notif_type = 'order_declined'
         elif status_clean == 'cancelled':
-            body = "âš ï¸ Order was cancelled"
+            body = "\u26a0\ufe0f Order was cancelled"
             notif_type = 'order_cancelled'
         else:
-            body = f"ðŸ“¦ Order {status_val.capitalize()}"
+            body = "Order status: " + str(status_val).capitalize()
             notif_type = 'order_status'
 
+        # If executive conversation, notify the company
+        if conversation.executive_id:
+            exec_name = conversation.executive.executive_name if conversation.executive else 'Executive'
+            title = exec_name
+            status_data = {
+                'type': notif_type,
+                'conversation_id': str(conversation.id),
+                'company_id': str(conversation.company_id or ''),
+                'executive_id': str(conversation.executive_id or ''),
+                'sender_type': 'executive',
+                'sender_name': exec_name,
+                'title_name': exec_name,
+                'order_status': status_clean,
+            }
+            if conversation.company_id:
+                send_push_to_user(
+                    user_id=conversation.company_id,
+                    user_type='company',
+                    title=title,
+                    body=body,
+                    data=status_data
+                )
+            return
+
+        # Customer conversation: notify customer
+        if not conversation.enduser_id:
+            return
+        company_name = conversation.company.companyname if conversation.company else 'Store'
+        title = company_name
+        if status_clean == 'accepted':
+            body = "\u2705 Accepted your order\nThe store is preparing your invoice."
         status_data = {
             'type': notif_type,
             'conversation_id': str(conversation.id),

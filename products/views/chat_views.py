@@ -5,7 +5,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
 from rest_framework import serializers
 
-from ..models import Conversation, ChatMessage, SupplierExecutive, Supplier, Company, Users, DeviceFCMToken, EndUser
+from ..models import Conversation, ChatMessage, SupplierExecutive, Supplier, Company, Users, DeviceFCMToken, EndUser, SupplierOrder, SupplierOrderItem, SupplierProduct, Products
 from ..fcm_utils import notify_chat_message, notify_new_order, notify_order_status, notify_bill_sent
 
 
@@ -504,36 +504,55 @@ def send_order_message(request):
     try:
         company_id = _resolve_company_id(request.data.get('company_id'))
         enduser_id = request.data.get('enduser_id')
+        executive_id = request.data.get('executive_id')
+        conversation_id = request.data.get('conversation_id')
         buyer_company_id = _resolve_company_id(request.data.get('buyer_company_id'))
         cart_items = request.data.get('cart_items', [])
+        sender_type_param = (request.data.get('sender_type') or '').strip().lower()
 
-        # If order is placed by a company buyer, ensure we map to the company's dedicated EndUser account
-        if buyer_company_id:
-            try:
-                buyer_comp = Company.objects.get(companyid=buyer_company_id)
-                buyer_enduser = EndUser.objects.filter(endusername__iexact=buyer_comp.companyname).first()
-                if not buyer_enduser:
-                    buyer_enduser = EndUser.objects.filter(endusername__iexact=f"{buyer_comp.companyname} (Store)").first()
-                if not buyer_enduser:
-                    candidate_name = buyer_comp.companyname
-                    if EndUser.objects.filter(endusername__iexact=candidate_name).exists():
-                        candidate_name = f"{buyer_comp.companyname} (Store)"
-                    buyer_enduser = EndUser.objects.create(
-                        endusername=candidate_name,
-                        enduserpassword='1234',
-                        enduserphone=str(buyer_comp.companyphonenumber) if buyer_comp.companyphonenumber else None,
-                    )
-                enduser_id = buyer_enduser.endsuerid
-            except Exception as e:
-                print(f"[send_order_message] Error resolving buyer company {buyer_company_id}: {e}")
+        conversation = None
+        if conversation_id and int(conversation_id) > 0:
+            conversation = Conversation.objects.filter(id=int(conversation_id)).first()
 
-        conversation, created = Conversation.objects.get_or_create(
-            company_id=company_id,
-            enduser_id=enduser_id,
-            defaults={'conversation_type': 'customer'}
-        )
+        if not conversation and executive_id:
+            conversation = Conversation.objects.filter(
+                company_id=company_id,
+                executive_id=executive_id
+            ).first()
+            if not conversation:
+                conversation = Conversation.objects.create(
+                    company_id=company_id,
+                    executive_id=executive_id,
+                    conversation_type='executive'
+                )
 
-        buyer_name = conversation.enduser.endusername if conversation.enduser else 'Customer'
+        if not conversation:
+            # If order is placed by a company buyer, ensure we map to the company's dedicated EndUser account
+            if buyer_company_id:
+                try:
+                    buyer_comp = Company.objects.get(companyid=buyer_company_id)
+                    buyer_enduser = EndUser.objects.filter(endusername__iexact=buyer_comp.companyname).first()
+                    if not buyer_enduser:
+                        buyer_enduser = EndUser.objects.filter(endusername__iexact=f"{buyer_comp.companyname} (Store)").first()
+                    if not buyer_enduser:
+                        candidate_name = buyer_comp.companyname
+                        if EndUser.objects.filter(endusername__iexact=candidate_name).exists():
+                            candidate_name = f"{buyer_comp.companyname} (Store)"
+                        buyer_enduser = EndUser.objects.create(
+                            endusername=candidate_name,
+                            enduserpassword='1234',
+                            enduserphone=str(buyer_comp.companyphonenumber) if buyer_comp.companyphonenumber else None,
+                        )
+                    enduser_id = buyer_enduser.endsuerid
+                except Exception as e:
+                    print(f"[send_order_message] Error resolving buyer company {buyer_company_id}: {e}")
+
+            conversation, created = Conversation.objects.get_or_create(
+                company_id=company_id,
+                enduser_id=enduser_id,
+                defaults={'conversation_type': 'customer'}
+            )
+
         note = (request.data.get('note') or '').strip()
         order_text = chr(0x1F6CD) + chr(0xFE0F) + ' New Order\n\n'
         for item in cart_items:
@@ -541,10 +560,78 @@ def send_order_message(request):
             name = item.get('name', 'Product')
             order_text += chr(0x2022) + f" {name} (x{qty})\n"
         if note:
-            order_text += f"\n\u0001F4DD Note: {note}\n"
+            order_text += f"\n\U0001F4DD Note: {note}\n"
+
+        # If this is an executive conversation, create real SupplierOrder so it appears in:
+        # 1. Executive's "My Orders" screen
+        # 2. Supplier Manager's "Field Orders" tab
+        # 3. Supplier Dashboard's Field Orders list
+        created_supplier_order = None
+        if conversation.executive_id or executive_id:
+            try:
+                executive = conversation.executive if conversation.executive else SupplierExecutive.objects.filter(executiveid=executive_id).first()
+                company = conversation.company if conversation.company else Company.objects.filter(companyid=company_id).first()
+                supplier = None
+
+                supp_user = executive.supplier_user or (executive.manager.supplier_user if executive and executive.manager else None)
+                if supp_user and company:
+                    supp_q = Q(companyid=company)
+                    filter_q = Q(supplierphonenumber=supp_user.supplieruserphone)
+                    if getattr(supp_user, 'supplierusergst', None):
+                        filter_q |= Q(suppliergst=supp_user.supplierusergst)
+                    if getattr(supp_user, 'supplierusergstnumber', None):
+                        filter_q |= Q(suppliergst=supp_user.supplierusergstnumber)
+                    if supp_user.supplierusername:
+                        filter_q |= Q(suppliername__iexact=supp_user.supplierusername)
+                    supplier = Supplier.objects.filter(supp_q & filter_q).first()
+
+                if not supplier and supp_user and company:
+                    supplier = Supplier.objects.create(
+                        companyid=company,
+                        suppliername=supp_user.supplierusername,
+                        supplierphonenumber=supp_user.supplieruserphone,
+                        suppliergst=getattr(supp_user, 'supplierusergst', '') or getattr(supp_user, 'supplierusergstnumber', '') or '',
+                        supplieraddress=getattr(supp_user, 'supplieruseraddress', '') or '',
+                        location_coordinates=getattr(supp_user, 'location_coordinates', None),
+                    )
+
+                if not supplier and company:
+                    supplier = Supplier.objects.filter(companyid=company).first()
+
+                if supplier and executive and company:
+                    created_supplier_order = SupplierOrder.objects.create(
+                        company=company,
+                        supplier=supplier,
+                        executive=executive,
+                        total_amount=0,
+                        status='Pending',
+                    )
+
+                    for item in cart_items:
+                        pid = item.get('product_id')
+                        qty = int(item.get('qty', 1))
+                        product = Products.objects.filter(productid=pid).first()
+                        if not product and pid:
+                            product = Products.objects.filter(id=pid).first()
+                        if product:
+                            supp_prod = SupplierProduct.objects.filter(company=company, supplier=supplier, product=product).first()
+                            SupplierOrderItem.objects.create(
+                                order=created_supplier_order,
+                                product=product,
+                                supplier_product=supp_prod,
+                                quantity=qty,
+                                price_at_order=0,
+                            )
+            except Exception as _so_err:
+                print(f"[send_order_message] Error creating SupplierOrder: {_so_err}")
+
+        if created_supplier_order:
+            order_text += f"\n[ref:#{created_supplier_order.order_id}]"
+
+        effective_sender_type = sender_type_param or ('company' if conversation.executive_id else 'enduser')
         msg = ChatMessage.objects.create(
             conversation=conversation,
-            sender_type='enduser',
+            sender_type=effective_sender_type,
             text_content=order_text,
             order_status='pending'
         )
@@ -558,7 +645,7 @@ def send_order_message(request):
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying on order: {_fcm_err}")
 
-        return Response({'success': True, 'message': 'Order sent as chat message.'})
+        return Response({'success': True, 'message': 'Order sent as chat message.', 'conversation_id': conversation.id, 'message_id': msg.id})
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -570,7 +657,9 @@ def delete_message(request, message_id):
         if sender_type == 'executive' or request.GET.get('is_executive') == 'true':
             return Response({'error': 'Supplier executives are not permitted to delete sent messages.'}, status=status.HTTP_403_FORBIDDEN)
         msg = ChatMessage.objects.get(id=message_id)
-        if sender_type == 'executive':
+        if sender_type == 'executive' or msg.sender_type == 'executive':
+            return Response({'error': 'Supplier executives are not permitted to delete sent messages.'}, status=status.HTTP_403_FORBIDDEN)
+        if msg.conversation and msg.conversation.executive_id and msg.sender_type == 'executive':
             return Response({'error': 'Supplier executives are not permitted to delete sent messages.'}, status=status.HTTP_403_FORBIDDEN)
         msg.delete()
         return Response({'success': True, 'message': 'Message deleted completely.'})
@@ -596,6 +685,25 @@ def update_order_status(request, message_id):
         msg = ChatMessage.objects.get(id=message_id)
         msg.order_status = status_val
         msg.save()
+
+        # Sync SupplierOrder if linked to executive
+        if msg.conversation and msg.conversation.executive_id:
+            try:
+                target_status = 'Approved' if status_val == 'accepted' else ('Declined' if status_val == 'declined' else str(status_val).capitalize())
+                ref_match = re.search(r'\[ref:#(\d+)\]', msg.text_content or '')
+                if ref_match:
+                    so_id = int(ref_match.group(1))
+                    SupplierOrder.objects.filter(order_id=so_id).update(status=target_status)
+                else:
+                    so = SupplierOrder.objects.filter(
+                        company_id=msg.conversation.company_id,
+                        executive_id=msg.conversation.executive_id
+                    ).order_by('-created_at').first()
+                    if so:
+                        so.status = target_status
+                        so.save()
+            except Exception as _so_sync:
+                print(f"[update_order_status] Error syncing SupplierOrder: {_so_sync}")
 
         # Trigger Push Notification
         try:
@@ -713,6 +821,9 @@ def update_fcm_token(request):
         uid = int(user_id)
         token_str = str(fcm_token).strip()
 
+        # Remove token from other users so multi-account testing on the same device does not route wrong notifications
+        DeviceFCMToken.objects.filter(fcm_token=token_str).exclude(user_id=uid, user_type=user_type).delete()
+
         DeviceFCMToken.objects.update_or_create(
             user_id=uid,
             user_type=user_type,
@@ -787,6 +898,15 @@ def get_conversation_details(request, conversation_id=0):
                 exec_phone = str(getattr(se, 'executive_phone', '') or "").strip()
                 exec_name = se.executive_name or ''
 
+        supp_id = None
+        if conv and conv.executive:
+            ex = conv.executive
+            supp_id = ex.supplier_user_id or (ex.manager.supplier_user_id if ex.manager else None)
+        elif exec_id:
+            se = SupplierExecutive.objects.filter(executiveid=exec_id).first()
+            if se:
+                supp_id = se.supplier_user_id or (se.manager.supplier_user_id if se.manager else None)
+
         return Response({
             'conversation_id': conv.id if conv else int(conversation_id or 0),
             'company_phone': comp_phone,
@@ -795,6 +915,8 @@ def get_conversation_details(request, conversation_id=0):
             'enduser_name': enduser_name,
             'executive_phone': exec_phone,
             'executive_name': exec_name,
+            'supplier_id': supp_id,
+            'conversation_type': conv.conversation_type if conv else ('executive' if exec_id else 'customer'),
         })
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -890,5 +1012,52 @@ def get_manager_monitored_conversations(request, manager_id):
                 'unread_count': unread_count,
             })
         return Response(result)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+def update_supplier_order_status(request, order_id):
+    try:
+        status_val = request.data.get('status') or 'Approved'
+        order = SupplierOrder.objects.get(order_id=order_id)
+        order.status = status_val.capitalize()
+        order.save()
+
+        # Also sync chat message if there's a matching message with [ref:#order_id]
+        chat_status = 'accepted' if status_val.lower() in ['approved', 'accepted'] else ('declined' if status_val.lower() == 'declined' else status_val.lower())
+        ChatMessage.objects.filter(text_content__contains=f'[ref:#{order_id}]').update(order_status=chat_status)
+
+        try:
+            conv = Conversation.objects.filter(company=order.company, executive=order.executive).first()
+            if conv:
+                notify_order_status(conv, chat_status)
+        except Exception as _nerr:
+            pass
+
+        return Response({'success': True, 'message': f'Order status updated to {order.status}'})
+    except SupplierOrder.DoesNotExist:
+        return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['DELETE', 'POST'])
+def delete_supplier_order(request, order_id):
+    try:
+        sender_type = (request.GET.get('sender_type') or request.data.get('sender_type') or '').strip().lower()
+        if sender_type == 'executive' or request.GET.get('is_executive') == 'true':
+            return Response({'error': 'Supplier executives are not permitted to delete orders.'}, status=status.HTTP_403_FORBIDDEN)
+        order = SupplierOrder.objects.filter(order_id=order_id).first()
+        if order:
+            SupplierOrderItem.objects.filter(order=order).delete()
+            ChatMessage.objects.filter(text_content__contains=f'[ref:#{order_id}]').delete()
+            order.delete()
+            return Response({'success': True, 'message': 'Order deleted completely.'})
+        cm = ChatMessage.objects.filter(id=order_id).first()
+        if cm:
+            cm.delete()
+            return Response({'success': True, 'message': 'Order message deleted completely.'})
+        return Response({'error': 'Order not found'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
