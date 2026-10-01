@@ -31,6 +31,8 @@ class Company(models.Model):
     companylocation = models.CharField(max_length=200, blank=True, null=True)
     companyaddress = models.TextField(blank=True, null=True)
     categoryid = models.ForeignKey(Companycategory, models.DO_NOTHING, db_column='categoryid', blank=True, null=True)
+    coins_balance = models.IntegerField(default=1000, db_column='coins_balance')
+    premium_tokens_balance = models.IntegerField(default=500, db_column='premium_tokens_balance')
 
     class Meta:
         managed = False
@@ -97,6 +99,10 @@ class Supplier(models.Model):
     supplierpanno = models.CharField(max_length=20, blank=True, null=True)
     companyid = models.ForeignKey(Company, models.DO_NOTHING, db_column='companyid')
     location_coordinates = models.CharField(max_length=255, blank=True, null=True, db_column='location_coordinates')
+    coins_balance = models.IntegerField(default=0, db_column='coins_balance')
+    premium_tokens_balance = models.IntegerField(default=0, db_column='premium_tokens_balance')
+    coins_balance = models.IntegerField(default=0, db_column='coins_balance')
+    premium_tokens_balance = models.IntegerField(default=0, db_column='premium_tokens_balance')
 
     class Meta:
         managed = False
@@ -140,6 +146,9 @@ class EndUser(models.Model):
     enduserpassword = models.CharField(max_length=100, blank=True, null=True, db_column='enduserpassword')
     enduseremail = models.CharField(max_length=100, blank=True, null=True, db_column='enduseremail')
     enduserphone = models.CharField(max_length=20, blank=True, null=True, db_column='enduserphone')
+    coins_balance = models.IntegerField(default=1000, db_column='coins_balance')
+    is_verified_customer = models.BooleanField(default=True, db_column='is_verified_customer')
+    completed_orders_count = models.IntegerField(default=0, db_column='completed_orders_count')
 
     class Meta:
         managed = False
@@ -186,6 +195,12 @@ class ChatMessage(models.Model):
     is_read = models.BooleanField(default=False)
     timestamp = models.DateTimeField(auto_now_add=True)
     order_status = models.CharField(max_length=20, default='pending')
+    commitment_coins_locked = models.IntegerField(default=0)
+    is_customer_confirmed = models.BooleanField(default=False)
+    is_coins_refunded = models.BooleanField(default=False)
+    pack_confirmed_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+    is_pack_confirmed = models.BooleanField(default=False)
 
     class Meta:
         managed = True
@@ -300,3 +315,17 @@ class DeviceFCMToken(models.Model):
         managed = True
         db_table = 'device_fcm_token'
         unique_together = (('user_id', 'user_type'),)
+
+
+class CoinTransaction(models.Model):
+    transaction_id = models.AutoField(primary_key=True)
+    end_user = models.ForeignKey(EndUser, on_delete=models.CASCADE, related_name='coin_transactions', db_column='endsuerid')
+    amount = models.IntegerField()
+    transaction_type = models.CharField(max_length=50) # 'welcome_bonus', 'order_lock', 'order_refund', 'forfeited'
+    reference_order_id = models.IntegerField(null=True, blank=True)
+    note = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = False
+        db_table = 'coin_transaction'

@@ -1,6 +1,7 @@
 from ..serializers import CommitmentSerializer
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db import transaction
 from django.db.models import Q
@@ -8,6 +9,8 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiRespon
 from rest_framework import serializers
 
 from ..models import Commitment, Supplier, Supplieruser, SupplierBill, Company, Users, SupplierOrder, SupplierExecutive
+from ..password_utils import hash_password
+from ..api_auth import RoleTokenAuthentication
 
 
 @extend_schema(
@@ -61,6 +64,8 @@ def _allocate_payments_to_bills(regular_bills, payment_bills):
 
 @api_view(['GET'])
 def search_supplier_globally(request):
+    if request.user.role not in {'company', 'admin'}:
+        return Response({'error': 'Only a company account can search suppliers.'}, status=status.HTTP_403_FORBIDDEN)
     phone = request.GET.get('phone')
     gstn = request.GET.get('gstn')
 
@@ -96,6 +101,8 @@ def search_supplier_globally(request):
 )
 @api_view(['GET'])
 def search_local_supplier(request):
+    if request.user.role != 'company':
+        return Response({'error': 'Only a company account can search its local suppliers.'}, status=status.HTTP_403_FORBIDDEN)
     phone = request.GET.get('phone')
     gstn = request.GET.get('gstn')
     company_user_id = (
@@ -105,17 +112,16 @@ def search_local_supplier(request):
         request.GET.get('companyid')
     )
 
-    # Resolve company from user_id if provided
-    company = None
     if company_user_id:
         try:
-            user_obj = Users.objects.select_related('companyid').get(userid=company_user_id)
-            company = user_obj.companyid
-        except Users.DoesNotExist:
-            try:
-                company = Company.objects.get(companyid=company_user_id)
-            except Company.DoesNotExist:
-                pass
+            requested_id = int(company_user_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'Invalid company ID.'}, status=status.HTTP_400_BAD_REQUEST)
+        if requested_id not in {request.user.user_id, request.user.company_id}:
+            return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
+    company = Company.objects.filter(companyid=request.user.company_id).first()
+    if not company:
+        return Response({'error': 'Company not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     supplier = None
     qs = Supplier.objects.all()
@@ -162,6 +168,15 @@ def connect_supplier(request):
     supplier_user_id = data.get('supplieruserid') or data.get('supplier_user_id') or data.get('supplier_id')
     company_user_id = data.get('userid') or data.get('user_id') or data.get('company_user_id')
 
+    if request.user.role != 'company':
+        return Response({'error': 'Only a company account can connect suppliers.'}, status=status.HTTP_403_FORBIDDEN)
+    try:
+        requested_company_id = int(company_user_id)
+    except (TypeError, ValueError):
+        return Response({'error': 'A valid company ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
+    if requested_company_id not in {request.user.user_id, request.user.company_id}:
+        return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
+
     if not supplier_user_id or not company_user_id:
         return Response({'error': 'supplieruserid and userid are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -179,6 +194,8 @@ def connect_supplier(request):
 
     if company is None:
         return Response({'error': 'Company not found for this user.'}, status=status.HTTP_404_NOT_FOUND)
+    if company.companyid != request.user.company_id:
+        return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
 
     local_supplier = None
     phone = supplier_user.supplieruserphone
@@ -239,6 +256,8 @@ def connect_supplier(request):
 
 @api_view(['GET'])
 def supplier_bills(request, supplier_user_id):
+    if request.user.role != 'supplier' or request.user.supplier_user_id != supplier_user_id:
+        return Response({'error': 'Not authorized for this supplier.'}, status=status.HTTP_403_FORBIDDEN)
     try:
         supplier_user = Supplieruser.objects.get(supplieruserid=supplier_user_id)
     except Supplieruser.DoesNotExist:
@@ -353,6 +372,8 @@ def supplier_bills(request, supplier_user_id):
 
 @api_view(['GET'])
 def supplier_dashboard(request, supplier_user_id):
+    if request.user.role != 'supplier' or request.user.supplier_user_id != supplier_user_id:
+        return Response({'error': 'Not authorized for this supplier.'}, status=status.HTTP_403_FORBIDDEN)
     try:
         supplier_user = Supplieruser.objects.get(supplieruserid=supplier_user_id)
     except Supplieruser.DoesNotExist:
@@ -460,12 +481,21 @@ def supplier_dashboard(request, supplier_user_id):
 def onboard_supplier(request):
     data = request.data
     try:
+        if request.user.role != 'company':
+            return Response({'error': 'Only a company account can onboard suppliers.'}, status=status.HTTP_403_FORBIDDEN)
         phone = data.get('phone')
         username = data.get('username')
         # determine company context (accept either userid or companyid)
         company = None
         user_id = data.get('userid') or data.get('user_id')
         company_id = data.get('companyid') or data.get('company_id')
+        requested_company_id = company_id or user_id
+        try:
+            requested_company_id = int(requested_company_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'A valid company ID is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if requested_company_id not in {request.user.user_id, request.user.company_id}:
+            return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
         if user_id:
             try:
                 user_obj = Users.objects.select_related('companyid').get(userid=user_id)
@@ -479,6 +509,9 @@ def onboard_supplier(request):
                 user_obj = Users.objects.filter(userid=company_id).select_related('companyid').first()
                 company = user_obj.companyid if user_obj else None
 
+        if not company or company.companyid != request.user.company_id:
+            return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
+
         with transaction.atomic():
             if phone and Supplieruser.objects.filter(supplieruserphone=phone).exists():
                 return Response({'error': 'Supplier with this phone already exists'}, status=status.HTTP_400_BAD_REQUEST)
@@ -489,7 +522,7 @@ def onboard_supplier(request):
             supplier_user = Supplieruser.objects.create(
                 suppliername=data.get('suppliername') or data.get('name'),
                 supplierusername=username,
-                supplieruserpassword=data.get('password'),
+                supplieruserpassword=hash_password(data.get('password')),
                 supplieruserphone=phone,
                 supplieruseremail=data.get('email'),
                 supplierusergstnumber=data.get('gst_number'),
@@ -539,7 +572,6 @@ def onboard_supplier(request):
             'supplierid': supplier_user.supplierid_id,
             'supplier_id': supplier_user.supplierid_id,
             'username': supplier_user.supplierusername,
-            'password': supplier_user.supplieruserpassword or '',
             'message': 'Successfully onboarded the supplier'
         }
 
@@ -548,76 +580,194 @@ def onboard_supplier(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+def _commitment_coin_cost(bill_amount, extension_count):
+    """
+    Step 2.3: B2B Commitment Due Date Extension Formula
+    Rate Escalation:
+      - 1st extension (count=0): 10% of bill amount
+      - 2nd extension (count=1): 12% of bill amount
+      - 3rd extension (count=2): 13% of bill amount
+      - Max 3 extensions per bill.
+    """
+    if extension_count >= 3:
+        raise ValueError('Maximum 3 extensions reached. Bill must be settled.')
+    rates = [0.10, 0.12, 0.13]
+    rate = rates[min(extension_count, 2)]
+    amt = float(bill_amount or 0)
+    if amt <= 0:
+        amt = 1000.0
+    return max(10, int(round(amt * rate)))
+
+
+def _supplier_local_ids(supplier_user_id):
+    supplier_user = Supplieruser.objects.filter(supplieruserid=supplier_user_id).first()
+    if not supplier_user:
+        return []
+    match = Q()
+    if supplier_user.supplieruserphone:
+        match |= Q(supplierphonenumber=supplier_user.supplieruserphone)
+    if supplier_user.supplierusergstnumber:
+        match |= Q(suppliergst=supplier_user.supplierusergstnumber)
+    if not match and supplier_user.suppliername:
+        match = Q(suppliername__iexact=supplier_user.suppliername)
+    if not match:
+        return []
+    return list(Supplier.objects.filter(match).values_list('supplierid', flat=True))
+
+
 @api_view(['GET', 'POST'])
+@authentication_classes([RoleTokenAuthentication])
+@permission_classes([IsAuthenticated])
 def bill_commitments_view(request, bill_no=None):
     if request.method == 'POST':
         data = request.data
-        b_no = data.get('bill_no') or bill_no
+        b_no = str(data.get('bill_no') or bill_no or '').strip()
         if not b_no:
             return Response({'error': 'bill_no is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        new_due = data.get('new_due_date') or ''
-        prev_due = data.get('previous_due_date') or ''
+        new_due = str(data.get('new_due_date') or '').strip()
+        prev_due = str(data.get('previous_due_date') or '').strip()
+        narration = str(data.get('narration') or '')
         try:
             ext_days = int(data.get('extension_days') or 0)
-        except Exception:
-            ext_days = 0
-        narration = data.get('narration') or ''
+            from datetime import datetime
+            due_date_val = datetime.strptime(new_due, '%Y-%m-%d').date()
+        except (TypeError, ValueError):
+            return Response({'error': 'A valid extension_days and new_due_date are required.'}, status=status.HTTP_400_BAD_REQUEST)
+        if ext_days <= 0 or ext_days > 365:
+            return Response({'error': 'extension_days must be between 1 and 365.'}, status=status.HTTP_400_BAD_REQUEST)
+
         bill_id = data.get('bill_id')
         company_id = data.get('company_id')
         supplier_id = data.get('supplier_id')
+        charge_company_wallet = data.get('charge_company_wallet') is True
 
-        # Automatically resolve missing IDs from existing SupplierBill and Supplier table
-        try:
-            sb = SupplierBill.objects.filter(supplierbillno=b_no).select_related('supplierid').first()
-            if sb:
-                if not bill_id:
-                    bill_id = sb.supplierbillid
-                if not supplier_id and sb.supplierid:
-                    supplier_id = getattr(sb.supplierid, 'supplierid', None)
-                if not company_id and sb.supplierid:
-                    company_id = getattr(sb.supplierid, 'companyid_id', None)
-                    if not company_id and hasattr(sb.supplierid, 'companyid'):
-                        company_id = getattr(sb.supplierid.companyid, 'companyid', None)
-        except Exception:
-            pass
-
-        due_date_val = None
-        try:
-            from datetime import datetime
-            due_date_val = datetime.strptime(new_due.strip(), '%Y-%m-%d').date()
-        except Exception:
-            pass
-
-        commitment = Commitment.objects.create(
-            bill_no=b_no,
-            bill_id=bill_id,
-            company_id=company_id,
-            supplier_id=supplier_id,
-            previous_due_date=prev_due,
-            new_due_date=new_due,
-            bill_due_date=due_date_val,
-            extension_days=ext_days,
-            narration=narration,
-        )
+        if request.user.role == 'company':
+            if not charge_company_wallet:
+                return Response({'error': 'Company extensions must include the wallet charge.'}, status=status.HTTP_400_BAD_REQUEST)
+            if not company_id or int(company_id) != request.user.company_id:
+                return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
+        elif request.user.role == 'supplier':
+            if charge_company_wallet:
+                return Response({'error': 'Supplier commitments cannot charge a company wallet.'}, status=status.HTTP_403_FORBIDDEN)
+        else:
+            return Response({'error': 'Not authorized to create commitments.'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
-            if due_date_val:
-                SupplierBill.objects.filter(supplierbillno=b_no).update(supplierbillduedate=due_date_val)
-        except Exception:
-            pass
+            with transaction.atomic():
+                bill_query = SupplierBill.objects.select_related('supplierid')
+                bill = None
+                if bill_id:
+                    bill = bill_query.filter(supplierbillid=bill_id, supplierbillno=b_no).first()
+                if bill is None:
+                    bill = bill_query.filter(supplierbillno=b_no).order_by('supplierbillid').first()
 
-        serializer = CommitmentSerializer(commitment)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+                if bill:
+                    bill_id = bill.supplierbillid
+                    supplier_id = bill.supplierid_id
+                    bill_company_id = bill.supplierid.companyid_id
+                    if charge_company_wallet:
+                        if not company_id or int(company_id) != bill_company_id:
+                            return Response({'error': 'The company does not own this bill.'}, status=status.HTTP_403_FORBIDDEN)
+                        company = Company.objects.select_for_update().filter(companyid=bill_company_id).first()
+                        if not company:
+                            return Response({'error': 'Company not found.'}, status=status.HTTP_404_NOT_FOUND)
+                        extension_count = Commitment.objects.filter(
+                            bill_no=b_no,
+                            company_id=bill_company_id,
+                            supplier_id=supplier_id,
+                        ).count()
 
-    elif request.method == 'GET':
-        b_no = bill_no or request.GET.get('bill_no')
-        if not b_no:
-            return Response({'error': 'bill_no is required'}, status=status.HTTP_400_BAD_REQUEST)
+                        if extension_count >= 3:
+                            return Response({
+                                'error': 'Maximum 3 extensions reached for this bill. Bill must be settled.'
+                            }, status=status.HTTP_400_BAD_REQUEST)
 
-        commitments = Commitment.objects.filter(bill_no=b_no).order_by('-created_at')
-        serializer = CommitmentSerializer(commitments, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+                        ext_days = 10
+                        bill_amt = float(bill.supplierbillamount or bill.balance or 0)
+                        coin_cost = _commitment_coin_cost(bill_amt, extension_count)
+                        current_balance = getattr(company, 'premium_tokens_balance', 0) or 0
+
+                        if current_balance < coin_cost:
+                            return Response({
+                                'success': False,
+                                'error': f'Insufficient Premium Tokens. Required: {coin_cost}, Available: {current_balance}',
+                                'coins_balance': current_balance,
+                                'premium_tokens_balance': current_balance,
+                                'required': coin_cost,
+                            }, status=status.HTTP_400_BAD_REQUEST)
+
+                        # Deduct from company premium tokens
+                        company.premium_tokens_balance = current_balance - coin_cost
+                        company.save(update_fields=['premium_tokens_balance'])
+
+                        # Step 2.4: Direct Token Transfer to Supplier
+                        supplier = Supplier.objects.filter(supplierid=supplier_id).first()
+                        if supplier:
+                            s_curr = getattr(supplier, 'premium_tokens_balance', 0) or 0
+                            supplier.premium_tokens_balance = s_curr + coin_cost
+                            supplier.save(update_fields=['premium_tokens_balance'])
+                    else:
+                        if supplier_id not in _supplier_local_ids(request.user.supplier_user_id):
+                            return Response({'error': 'Not authorized for this supplier bill.'}, status=status.HTTP_403_FORBIDDEN)
+                        company_id = bill_company_id
+                else:
+                    return Response({'error': 'Bill not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+                commitment = Commitment.objects.create(
+                    bill_no=b_no,
+                    bill_id=bill_id,
+                    company_id=company_id,
+                    supplier_id=supplier_id,
+                    previous_due_date=prev_due,
+                    new_due_date=new_due,
+                    bill_due_date=due_date_val,
+                    extension_days=ext_days,
+                    narration=narration,
+                )
+
+                if bill:
+                    SupplierBill.objects.filter(supplierbillid=bill.supplierbillid).update(
+                        supplierbillduedate=due_date_val,
+                    )
+
+            response_data = CommitmentSerializer(commitment).data
+            if charge_company_wallet:
+                response_data['coins_balance'] = getattr(company, 'premium_tokens_balance', 0)
+                response_data['premium_tokens_balance'] = getattr(company, 'premium_tokens_balance', 0)
+                response_data['coins_deducted'] = coin_cost
+            return Response(response_data, status=status.HTTP_201_CREATED)
+        except (TypeError, ValueError):
+            return Response({'error': 'Invalid company_id or bill_id.'}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    b_no = bill_no or request.GET.get('bill_no')
+    if not b_no:
+        return Response({'error': 'bill_no is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    commitments = Commitment.objects.filter(bill_no=b_no)
+    if request.user.role == 'company':
+        bill_exists = SupplierBill.objects.filter(
+            supplierbillno=b_no,
+            supplierid__companyid_id=request.user.company_id,
+        ).exists()
+        if not bill_exists:
+            return Response({'error': 'Not authorized for this bill.'}, status=status.HTTP_403_FORBIDDEN)
+        commitments = commitments.filter(company_id=request.user.company_id)
+    elif request.user.role == 'supplier':
+        supplier_ids = _supplier_local_ids(request.user.supplier_user_id)
+        if not supplier_ids or not SupplierBill.objects.filter(
+            supplierbillno=b_no,
+            supplierid_id__in=supplier_ids,
+        ).exists():
+            return Response({'error': 'Not authorized for this bill.'}, status=status.HTTP_403_FORBIDDEN)
+        commitments = commitments.filter(supplier_id__in=supplier_ids)
+    else:
+        return Response({'error': 'Not authorized to read commitments.'}, status=status.HTTP_403_FORBIDDEN)
+    commitments = commitments.order_by('-created_at')
+    serializer = CommitmentSerializer(commitments, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @extend_schema(
@@ -630,16 +780,21 @@ def bill_commitments_view(request, bill_no=None):
 )
 @api_view(['GET'])
 def get_available_suppliers(request):
+    if request.user.role != 'company':
+        return Response({'error': 'Only a company account can search available suppliers.'}, status=status.HTTP_403_FORBIDDEN)
     company_user_id = request.GET.get('userid') or request.GET.get('user_id') or request.GET.get('companyid') or request.GET.get('company_id')
     query = request.GET.get('search') or request.GET.get('query') or ''
 
-    company = None
     if company_user_id:
         try:
-            user_obj = Users.objects.select_related('companyid').get(userid=company_user_id)
-            company = user_obj.companyid
-        except Users.DoesNotExist:
-            company = Company.objects.filter(companyid=company_user_id).first()
+            requested_id = int(company_user_id)
+        except (TypeError, ValueError):
+            return Response({'error': 'Invalid company ID.'}, status=status.HTTP_400_BAD_REQUEST)
+        if requested_id not in {request.user.user_id, request.user.company_id}:
+            return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
+    company = Company.objects.filter(companyid=request.user.company_id).first()
+    if not company:
+        return Response({'error': 'Company not found.'}, status=status.HTTP_404_NOT_FOUND)
 
     connected_phones = set()
     connected_gsts = set()

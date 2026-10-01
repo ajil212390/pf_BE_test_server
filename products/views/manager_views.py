@@ -1,5 +1,6 @@
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from ..models import (
@@ -11,6 +12,8 @@ from ..models import (
     ExecutiveAllocation,
     Supplieruser,
 )
+from ..password_utils import hash_password, verify_and_upgrade_password
+from ..api_auth import issue_access_token
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +31,9 @@ def register_supplier_manager(request):
     phone = data.get('manager_phone', '')
     area = data.get('manager_area', '')
 
+    if request.user.role != 'supplier' or request.user.supplier_user_id != supplier_user_id:
+        return Response({'error': 'Not authorized to create managers for this supplier.'}, status=status.HTTP_403_FORBIDDEN)
+
     if not all([supplier_user_id, name, username, password]):
         return Response({'error': 'supplier_user_id, manager_name, manager_username, and manager_password are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -44,7 +50,7 @@ def register_supplier_manager(request):
             supplier_user=supplier_user,
             manager_name=name,
             manager_username=username,
-            manager_password=password,
+            manager_password=hash_password(password),
             manager_phone=phone,
             manager_area=area,
         )
@@ -58,6 +64,8 @@ def register_supplier_manager(request):
 
 
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def login_supplier_manager(request):
     """Supplier Manager login endpoint."""
     data = request.data
@@ -71,9 +79,14 @@ def login_supplier_manager(request):
         manager = SupplierManager.objects.select_related('supplier_user').get(
             manager_username__iexact=username
         )
-        if manager.manager_password == password:
+        if verify_and_upgrade_password(manager, 'manager_password', password):
             return Response({
                 'message': 'Login successful',
+                'access_token': issue_access_token(
+                    'manager',
+                    manager.manager_id,
+                    supplier_user_id=manager.supplier_user_id,
+                ),
                 'manager_id': manager.manager_id,
                 'manager_name': manager.manager_name,
                 'manager_phone': manager.manager_phone or '',

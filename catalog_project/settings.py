@@ -14,6 +14,8 @@ from pathlib import Path
 
 import os
 import dj_database_url
+from django.core.exceptions import ImproperlyConfigured
+from django.core.management.utils import get_random_secret_key
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -22,15 +24,36 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-@coojdp_6adqja4t39^data$9o*9o^-6=qz@%@ksxv#0jb58u4')
+APP_ENV = os.environ.get('APP_ENV', 'development').strip().lower()
+IS_PRODUCTION = APP_ENV == 'production'
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DEBUG', 'True') == 'True'
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    if IS_PRODUCTION:
+        raise ImproperlyConfigured('SECRET_KEY must be configured in production.')
+    SECRET_KEY = get_random_secret_key()
 
-ALLOWED_HOSTS = ['*']
+if IS_PRODUCTION:
+    DEBUG = os.environ.get('DEBUG', 'False').strip().lower() in {'1', 'true', 'yes'}
+    if DEBUG:
+        raise ImproperlyConfigured('DEBUG must be disabled in production.')
+    allowed_hosts = [host.strip() for host in os.environ.get('ALLOWED_HOSTS', '').split(',') if host.strip()]
+    render_hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+    if render_hostname:
+        allowed_hosts.append(render_hostname)
+    if not allowed_hosts:
+        raise ImproperlyConfigured('ALLOWED_HOSTS or RENDER_EXTERNAL_HOSTNAME must be configured in production.')
+    ALLOWED_HOSTS = list(dict.fromkeys(allowed_hosts))
+else:
+    DEBUG = os.environ.get('DEBUG', 'True').strip().lower() in {'1', 'true', 'yes'}
+    ALLOWED_HOSTS = ['*']
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_SSL_REDIRECT = IS_PRODUCTION
+SESSION_COOKIE_SECURE = IS_PRODUCTION
+CSRF_COOKIE_SECURE = IS_PRODUCTION
+SECURE_HSTS_SECONDS = 31536000 if IS_PRODUCTION else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = IS_PRODUCTION
 
 
 # Application definition
@@ -100,8 +123,18 @@ DATABASES = {
 db_from_env = dj_database_url.config(conn_max_age=600)
 if db_from_env:
     DATABASES['default'].update(db_from_env)
+elif IS_PRODUCTION:
+    raise ImproperlyConfigured('DATABASE_URL must be configured in production.')
 
-CORS_ALLOW_ALL_ORIGINS = True
+if IS_PRODUCTION:
+    CORS_ALLOW_ALL_ORIGINS = False
+    CORS_ALLOWED_ORIGINS = [
+        origin.strip()
+        for origin in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+        if origin.strip()
+    ]
+else:
+    CORS_ALLOW_ALL_ORIGINS = True
 
 
 # Password validation
@@ -148,6 +181,12 @@ else:
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'products.api_auth.RoleTokenAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
 }
 
 SPECTACULAR_SETTINGS = {

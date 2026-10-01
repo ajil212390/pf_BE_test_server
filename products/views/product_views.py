@@ -4,18 +4,57 @@ from datetime import datetime, date
 from django.db.models import Q
 from django.core.files.storage import default_storage
 from rest_framework import viewsets, status
+from rest_framework.permissions import BasePermission, SAFE_METHODS
 from rest_framework.response import Response
 
 from ..models import Products, Productcategory, Productunit, Users
 from ..serializers import ProductSerializer, ProductCategorySerializer, ProductUnitSerializer
 
 
+class ProductOwnerPermission(BasePermission):
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return True
+        return getattr(request.user, 'role', None) in {'admin', 'company'}
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS or request.user.role == 'admin':
+            return True
+        return request.user.role == 'company' and obj.companyid_id == request.user.company_id
+
+
+class ReadOnlyOrAdminPermission(BasePermission):
+    def has_permission(self, request, view):
+        return request.method in SAFE_METHODS or getattr(request.user, 'role', None) == 'admin'
+
+
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Products.objects.all()
     serializer_class = ProductSerializer
+    permission_classes = [ProductOwnerPermission]
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        role = getattr(self.request.user, 'role', None)
+        if role == 'company':
+            if not self.request.user.company_id:
+                return queryset.none()
+            requested_company_id = self.request.query_params.get('companyid')
+            requested_user_id = self.request.query_params.get('userid')
+            if requested_company_id and requested_company_id != str(self.request.user.company_id):
+                return queryset.none()
+            if requested_user_id and requested_user_id != str(self.request.user.user_id):
+                return queryset.none()
+            return queryset.filter(companyid_id=self.request.user.company_id)
+        if role == 'enduser':
+            company_id = self.request.query_params.get('companyid') or self.request.query_params.get('company_id')
+            try:
+                company_id = int(company_id)
+            except (TypeError, ValueError):
+                return queryset.none()
+            return queryset.filter(companyid_id=company_id)
+        if role != 'admin':
+            return queryset.none()
         company_id = self.request.query_params.get('companyid')
         user_id = self.request.query_params.get('userid')
         if company_id:
@@ -52,19 +91,16 @@ class ProductViewSet(viewsets.ModelViewSet):
         return ','.join(saved_paths)
 
     def create(self, request, *args, **kwargs):
+        if request.user.role == 'company' and not request.user.company_id:
+            return Response({'error': 'Company account has no company.'}, status=status.HTTP_403_FORBIDDEN)
         data = request.data.dict() if hasattr(request.data, 'dict') else dict(request.data)
         if 'productphotopath' in request.FILES:
             data['productphotopath'] = self._handle_image_uploads(request)
         data['addtype'] = 'Single'   # mark as single add
 
-        user_id = data.get('userid')
-        if user_id:
-            try:
-                user_obj = Users.objects.get(userid=user_id)
-                if user_obj.companyid:
-                    data['companyid'] = user_obj.companyid.companyid
-            except Users.DoesNotExist:
-                pass
+        if request.user.role == 'company':
+            data['userid'] = request.user.user_id
+            data['companyid'] = request.user.company_id
 
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
@@ -89,8 +125,10 @@ class ProductViewSet(viewsets.ModelViewSet):
 class ProductCategoryViewSet(viewsets.ModelViewSet):
     queryset = Productcategory.objects.all()
     serializer_class = ProductCategorySerializer
+    permission_classes = [ReadOnlyOrAdminPermission]
 
 
 class ProductUnitViewSet(viewsets.ModelViewSet):
     queryset = Productunit.objects.all()
     serializer_class = ProductUnitSerializer
+    permission_classes = [ReadOnlyOrAdminPermission]

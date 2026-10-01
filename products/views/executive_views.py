@@ -1,7 +1,8 @@
 import math
 
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from ..models import (
@@ -10,6 +11,8 @@ from ..models import (
     SupplierExecutive, SupplierManager, ExecutiveAllocation,
     SupplierOrder, SupplierOrderItem, Products, Users, ChatMessage,
 )
+from ..password_utils import hash_password, verify_and_upgrade_password
+from ..api_auth import issue_access_token
 from django.db.models import Q
 from django.db import transaction
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiTypes, inline_serializer
@@ -57,6 +60,14 @@ def register_supplier_executive(request):
     password = data.get('executive_password') or data.get('password')
     phone = data.get('executive_phone') or data.get('phone')
 
+    if request.user.role != 'manager' or request.user.manager_id != manager_id:
+        try:
+            owns_manager = request.user.role == 'manager' and request.user.manager_id == int(manager_id)
+        except (TypeError, ValueError):
+            owns_manager = False
+        if not owns_manager:
+            return Response({'error': 'Not authorized to create executives for this manager.'}, status=status.HTTP_403_FORBIDDEN)
+
     try:
         manager = SupplierManager.objects.get(manager_id=manager_id)
 
@@ -68,7 +79,7 @@ def register_supplier_executive(request):
             supplier_user=manager.supplier_user,
             executive_name=name,
             executive_username=username,
-            executive_password=password,
+            executive_password=hash_password(password),
             executive_phone=phone
         )
         return Response({'message': 'Executive registered successfully', 'executive_id': exec_obj.executiveid}, status=status.HTTP_201_CREATED)
@@ -79,6 +90,8 @@ def register_supplier_executive(request):
 
 
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def login_supplier_executive(request):
     data = request.data
     username = data.get('username')
@@ -86,9 +99,15 @@ def login_supplier_executive(request):
 
     try:
         executive = SupplierExecutive.objects.select_related('manager', 'manager__supplier_user').get(executive_username__iexact=username)
-        if executive.executive_password == password:
+        if verify_and_upgrade_password(executive, 'executive_password', password):
             return Response({
                 'message': 'Login successful',
+                'access_token': issue_access_token(
+                    'executive',
+                    executive.executiveid,
+                    manager_id=executive.manager_id,
+                    supplier_user_id=executive.supplier_user_id,
+                ),
                 'executive_id': executive.executiveid,
                 'executive_name': executive.executive_name,
                 'manager_id': executive.manager_id,

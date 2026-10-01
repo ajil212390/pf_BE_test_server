@@ -1,7 +1,8 @@
 from decimal import Decimal
 
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from django.db.models import Sum, Q
 
@@ -13,6 +14,33 @@ from ..models import Company, Users, Products, Customer, Supplier, CustomerBill,
 # Identifiers to exclude from all lists (the built-in super admin)
 ADMIN_USERNAME = 'admin'
 ADMIN_COMPANY  = 'Admin HQ'
+
+
+class IsAdminRole(BasePermission):
+    def has_permission(self, request, view):
+        return getattr(request.user, 'role', None) == 'admin'
+
+
+class IsAdminOrOwnCompanyUser(BasePermission):
+    def has_permission(self, request, view):
+        if getattr(request.user, 'role', None) == 'admin':
+            return True
+        try:
+            target_id = int(view.kwargs.get('user_id'))
+        except (TypeError, ValueError):
+            return False
+        return request.user.role == 'company' and request.user.user_id == target_id
+
+
+class IsAdminOrOwnEndUser(BasePermission):
+    def has_permission(self, request, view):
+        if getattr(request.user, 'role', None) == 'admin':
+            return True
+        try:
+            target_id = int(view.kwargs.get('enduser_id'))
+        except (TypeError, ValueError):
+            return False
+        return request.user.role == 'enduser' and request.user.user_id == target_id
 
 
 # ─── Financial helper functions ─────────────────────────────────────────────
@@ -103,6 +131,7 @@ def _allocate_payments_to_bills(regular_bills, payment_bills):
 # ─── Admin view functions ────────────────────────────────────────────────────
 
 @api_view(['GET'])
+@permission_classes([IsAdminRole])
 def admin_overview(request):
     """Returns high-level counts — excludes the built-in admin account."""
     total_companies = Company.objects.exclude(companyname__iexact=ADMIN_COMPANY).count()
@@ -120,6 +149,7 @@ def admin_overview(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAdminRole])
 def admin_companies(request):
     """Returns all companies except Admin HQ, with user, product & supplier counts."""
     companies = Company.objects.exclude(companyname__iexact=ADMIN_COMPANY)
@@ -142,6 +172,7 @@ def admin_companies(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAdminRole])
 def admin_users(request):
     """Returns all users except the built-in admin, with their company & product count."""
     users = (
@@ -163,6 +194,7 @@ def admin_users(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAdminRole])
 def admin_products(request):
     """Returns all products with the uploader and their company."""
     products = (
@@ -190,6 +222,7 @@ def admin_products(request):
 
 
 @api_view(['GET'])
+@permission_classes([IsAdminOrOwnCompanyUser])
 def admin_user_products(request, user_id):
     """Returns all products for a specific user or user's company (for drill-down view / dashboard)."""
     try:
@@ -237,6 +270,7 @@ def admin_user_products(request, user_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAdminOrOwnCompanyUser])
 def admin_user_customer_supplier_overview(request, user_id):
     """Returns customer and supplier overview totals for the company's dashboard."""
     try:
@@ -531,6 +565,7 @@ def admin_user_customer_supplier_overview(request, user_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAdminRole])
 def admin_company_products(request, company_id):
     """Returns all products for a specific company (for drill-down view)."""
     try:
@@ -565,6 +600,7 @@ def admin_company_products(request, company_id):
 
 
 @api_view(['GET'])
+@permission_classes([IsAdminRole])
 def admin_suppliers(request):
     """Returns all suppliers with connected status, company name, contact, and financials.
     Supports optional ?company_id= and ?connected= query parameters."""
@@ -606,6 +642,7 @@ def admin_suppliers(request):
     return Response(result)
 
 @api_view(['GET'])
+@permission_classes([IsAdminOrOwnEndUser])
 def get_enduser_store_bills_summary(request, enduser_id):
     """
     Returns store bills summary for an enduser by matching their phone number

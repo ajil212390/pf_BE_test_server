@@ -1,10 +1,14 @@
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
 from rest_framework import serializers
 
-from ..models import Company, Users, EndUser, Supplieruser
+from ..models import Company, Users, EndUser, Supplieruser, CoinTransaction
+from ..password_utils import hash_password, verify_and_upgrade_password
+from ..api_auth import issue_access_token
+from ..api_auth import RoleTokenAuthentication
 from django.db.models import Q
 
 
@@ -21,6 +25,8 @@ from django.db.models import Q
     responses={201: OpenApiResponse(description="Registration successful"), 400: OpenApiResponse(description="Bad request")}
 )
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def register_enduser(request):
     data = request.data
     try:
@@ -29,14 +35,26 @@ def register_enduser(request):
 
         enduser = EndUser.objects.create(
             endusername=data.get('endusername'),
-            enduserpassword=data.get('enduserpassword'),  # plain text, matching your existing pattern
+            enduserpassword=hash_password(data.get('enduserpassword')),
             enduseremail=data.get('enduseremail'),
             enduserphone=data.get('enduserphone'),
+            coins_balance=1000,
+            is_verified_customer=False,
+            completed_orders_count=0,
+        )
+        CoinTransaction.objects.create(
+            end_user=enduser,
+            amount=1000,
+            transaction_type='welcome_bonus',
+            note='Welcome Bonus'
         )
         return Response({
             'message': 'Registration successful',
+            'access_token': issue_access_token('enduser', enduser.endsuerid),
             'enduserid': enduser.endsuerid,
             'endusername': enduser.endusername,
+            'coins_balance': enduser.coins_balance,
+            'is_verified_customer': enduser.is_verified_customer,
         }, status=status.HTTP_201_CREATED)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -54,6 +72,8 @@ def register_enduser(request):
     responses={200: OpenApiResponse(description="Login successful"), 400: OpenApiResponse(description="Bad request"), 401: OpenApiResponse(description="Unauthorized"), 404: OpenApiResponse(description="Not found")}
 )
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def login_supplier(request):
     data = request.data
     username_or_phone = data.get('supplierusername') or data.get('username') or data.get('supplieruserphone') or data.get('phone')
@@ -71,9 +91,15 @@ def login_supplier(request):
         if not supplier_user:
             return Response({'error': 'Username or phone not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        if supplier_user.supplieruserpassword == password:
+        if verify_and_upgrade_password(supplier_user, 'supplieruserpassword', password):
             return Response({
                 'message': 'Login successful',
+                'access_token': issue_access_token(
+                    'supplier',
+                    supplier_user.supplieruserid,
+                    supplier_id=supplier_user.supplierid_id,
+                    supplier_user_id=supplier_user.supplieruserid,
+                ),
                 'supplieruserid': supplier_user.supplieruserid,
                 'supplierid': supplier_user.supplierid_id,
                 'suppliername': supplier_user.suppliername or '',
@@ -100,6 +126,8 @@ def login_supplier(request):
     responses={200: OpenApiResponse(description="Login successful"), 401: OpenApiResponse(description="Unauthorized"), 404: OpenApiResponse(description="Not found")}
 )
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def login_enduser(request):
     data = request.data
     username = data.get('endusername')
@@ -107,13 +135,16 @@ def login_enduser(request):
 
     try:
         enduser = EndUser.objects.get(endusername__iexact=username)
-        if enduser.enduserpassword == password:
+        if verify_and_upgrade_password(enduser, 'enduserpassword', password):
             return Response({
                 'message': 'Login successful',
+                'access_token': issue_access_token('enduser', enduser.endsuerid),
                 'enduserid': enduser.endsuerid,
                 'endusername': enduser.endusername,
                 'enduseremail': enduser.enduseremail or '',
                 'enduserphone': enduser.enduserphone or '',
+                'coins_balance': getattr(enduser, 'coins_balance', 1000),
+                'is_verified_customer': bool(getattr(enduser, 'is_verified_customer', True)),
             }, status=status.HTTP_200_OK)
         else:
             return Response({'error': 'Incorrect password.'}, status=status.HTTP_401_UNAUTHORIZED)
@@ -135,6 +166,8 @@ def login_enduser(request):
     responses={201: OpenApiResponse(description="Registration successful"), 400: OpenApiResponse(description="Bad request")}
 )
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def register_user(request):
     data = request.data
     try:
@@ -153,7 +186,7 @@ def register_user(request):
         user = Users.objects.create(
             username=data.get('username'),
             useremail=data.get('useremail'),
-            userpassword=data.get('userpassword'),  # Warning: Storing plain text password for demo
+            userpassword=hash_password(data.get('userpassword')),
             companyid=company
         )
 
@@ -179,6 +212,8 @@ def register_user(request):
     responses={200: OpenApiResponse(description="Login successful"), 401: OpenApiResponse(description="Unauthorized"), 404: OpenApiResponse(description="Not found")}
 )
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def login_user(request):
     data = request.data
     username = data.get('username')
@@ -186,10 +221,15 @@ def login_user(request):
 
     try:
         user = Users.objects.get(username__iexact=username)
-        if user.userpassword == password:
+        if verify_and_upgrade_password(user, 'userpassword', password):
             company = user.companyid
             return Response({
                 'message': 'Login successful',
+                'access_token': issue_access_token(
+                    'admin' if user.username.strip().lower() == 'admin' else 'company',
+                    user.userid,
+                    company_id=company.companyid if company else None,
+                ),
                 'userid': user.userid,
                 'username': user.username,
                 'useremail': user.useremail or '',
@@ -215,9 +255,18 @@ def login_user(request):
     responses={200: OpenApiResponse(description="Company updated successfully"), 400: OpenApiResponse(description="Bad request"), 404: OpenApiResponse(description="Not found")}
 )
 @api_view(['POST'])
+@authentication_classes([RoleTokenAuthentication])
+@permission_classes([IsAuthenticated])
 def update_company(request):
     data = request.data
     user_id = data.get('userid')
+    if request.user.role != 'company' or request.user.user_id != user_id:
+        try:
+            matches_user = request.user.user_id == int(user_id)
+        except (TypeError, ValueError):
+            matches_user = False
+        if request.user.role != 'company' or not matches_user:
+            return Response({'error': 'Not authorized to update this account.'}, status=status.HTTP_403_FORBIDDEN)
     try:
         user = Users.objects.get(userid=user_id)
         company = user.companyid
@@ -248,6 +297,8 @@ def update_company(request):
     responses={200: OpenApiResponse(description="Password changed successfully"), 400: OpenApiResponse(description="Bad request"), 404: OpenApiResponse(description="Not found")}
 )
 @api_view(['POST'])
+@authentication_classes([RoleTokenAuthentication])
+@permission_classes([IsAuthenticated])
 def change_password(request):
     data = request.data
     user_id = data.get('userid')
@@ -255,11 +306,18 @@ def change_password(request):
     new_password = data.get('new_password')
 
     try:
+        target_user_id = int(user_id)
+    except (TypeError, ValueError):
+        return Response({'error': 'Invalid user ID.'}, status=status.HTTP_400_BAD_REQUEST)
+    if request.user.role != 'company' or request.user.user_id != target_user_id:
+        return Response({'error': 'Not authorized to change this password.'}, status=status.HTTP_403_FORBIDDEN)
+
+    try:
         user = Users.objects.get(userid=user_id)
-        if user.userpassword != current_password:
+        if not verify_and_upgrade_password(user, 'userpassword', current_password):
             return Response({'error': 'Incorrect current password.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        user.userpassword = new_password
+        user.userpassword = hash_password(new_password)
         user.save()
         return Response({'message': 'Password changed successfully.'}, status=status.HTTP_200_OK)
     except Users.DoesNotExist:
