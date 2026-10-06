@@ -18,8 +18,8 @@ class ApiPrincipal:
         self.company_id = claims.get('company_id')
         self.supplier_id = claims.get('supplier_id')
         self.supplier_user_id = claims.get('supplier_user_id')
-        self.manager_id = claims.get('manager_id')
-        self.executive_id = claims.get('executive_id')
+        self.manager_id = claims.get('manager_id') or (self.user_id if self.role == 'manager' else None)
+        self.executive_id = claims.get('executive_id') or (self.user_id if self.role == 'executive' else None)
 
     @property
     def pk(self):

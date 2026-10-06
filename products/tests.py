@@ -268,8 +268,9 @@ class FinancialSummaryTests(SimpleTestCase):
         self.assertFalse(verify_and_upgrade_password(user, 'password', 'wrong-password'))
 
     def test_commitment_coin_cost_matches_extension_schedule(self):
-        self.assertEqual(_commitment_coin_cost(5, 0), 50)
-        self.assertEqual(_commitment_coin_cost(5, 1), 100)
-        self.assertEqual(_commitment_coin_cost(5, 5), 600)
-        self.assertEqual(_commitment_coin_cost(365, 10), 1000)
-        self.assertEqual(_commitment_coin_cost(0, 0), 0)
+        self.assertEqual(_commitment_coin_cost(1000, 0), 0)
+        self.assertEqual(_commitment_coin_cost(1000, 1), 120)
+        self.assertEqual(_commitment_coin_cost(1000, 2), 130)
+        self.assertEqual(_commitment_coin_cost(1000, 3), 140)
+        self.assertEqual(_commitment_coin_cost(1000, 4), 150)
+        self.assertEqual(_commitment_coin_cost(1000, 10), 210)

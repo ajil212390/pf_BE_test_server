@@ -370,6 +370,12 @@ def get_conversation_messages(request, conversation_id):
                 'is_read': msg.is_read,
                 'timestamp': msg.timestamp,
                 'order_status': msg.order_status,
+                'commitment_coins_locked': getattr(msg, 'commitment_coins_locked', 0) or 0,
+                'is_customer_confirmed': getattr(msg, 'is_customer_confirmed', False) or False,
+                'is_coins_refunded': getattr(msg, 'is_coins_refunded', False) or False,
+                'is_pack_confirmed': getattr(msg, 'is_pack_confirmed', False) or False,
+                'pack_confirmed_at': msg.pack_confirmed_at.isoformat() if getattr(msg, 'pack_confirmed_at', None) else None,
+                'expires_at': msg.expires_at.isoformat() if getattr(msg, 'expires_at', None) else None,
             })
         return Response(result)
     except Exception as e:
@@ -1340,50 +1346,139 @@ def recharge_enduser_wallet(request, enduser_id):
 @api_view(["POST"])
 @authentication_classes([RoleTokenAuthentication])
 @permission_classes([IsAuthenticated])
-def confirm_order_bill(request, conversation_id):
-    """Confirm the bill for an order in a conversation."""
+def confirm_order_bill(request, message_id=None, conversation_id=None):
+    """
+    Confirm the bill for an order in a conversation.
+    Deducts commitment tokens from EndUser and deposits them directly into Company normal tokens (coins_balance).
+    """
     try:
-        conv = Conversation.objects.filter(id=conversation_id).first()
+        target_id = message_id or conversation_id or request.data.get("message_id")
+        msg = ChatMessage.objects.filter(id=target_id).first()
+        if not msg and target_id:
+            msg = ChatMessage.objects.filter(conversation_id=target_id).order_by("-id").first()
+        if not msg:
+            return Response({"error": "Order message not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        conv = msg.conversation
         if not conv:
             return Response({"error": "Conversation not found"}, status=status.HTTP_404_NOT_FOUND)
+
         if not _can_access_conversation(request, conv):
             return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
-        order_msg = ChatMessage.objects.filter(conversation=conv, message_type="order").order_by("-created_at").first()
-        if order_msg:
-            order_msg.bill_confirmed = True
-            order_msg.save()
-        return Response({"success": True, "conversation_id": conversation_id})
+
+        try:
+            required_coins = int(request.data.get("required_coins", 200))
+        except (ValueError, TypeError):
+            required_coins = 200
+        if required_coins < 0:
+            required_coins = 200
+
+        with transaction.atomic():
+            # Update ChatMessage status and locked tokens
+            msg.order_status = "confirmed"
+            msg.is_customer_confirmed = True
+            msg.commitment_coins_locked = required_coins
+            msg.save(update_fields=["order_status", "is_customer_confirmed", "commitment_coins_locked"])
+
+            enduser_balance = 0
+            enduser = conv.enduser
+            if enduser:
+                enduser = EndUser.objects.select_for_update().filter(endsuerid=enduser.endsuerid).first()
+                if enduser:
+                    curr = enduser.coins_balance or 0
+                    enduser.coins_balance = max(0, curr - required_coins)
+                    enduser.save(update_fields=["coins_balance"])
+                    enduser_balance = enduser.coins_balance
+
+                    # Record transaction
+                    try:
+                        CoinTransaction.objects.create(
+                            end_user=enduser,
+                            amount=-required_coins,
+                            transaction_type="order_lock",
+                            reference_order_id=msg.id,
+                            note=f"Locked for pickup order #{msg.id}",
+                        )
+                    except Exception:
+                        pass
+
+            # Credit to company normal tokens (coins_balance)
+            company_balance = 0
+            company = conv.company
+            if company:
+                company = Company.objects.select_for_update().filter(companyid=company.companyid).first()
+                if company:
+                    company.coins_balance = (company.coins_balance or 0) + required_coins
+                    company.save(update_fields=["coins_balance"])
+                    company_balance = company.coins_balance
+
+        return Response({
+            "success": True,
+            "message_id": msg.id,
+            "conversation_id": conv.id,
+            "order_status": "confirmed",
+            "is_customer_confirmed": True,
+            "coins_locked": required_coins,
+            "coins_balance": enduser_balance,
+            "company_coins_balance": company_balance,
+        })
     except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        import traceback
+        traceback.print_exc()
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(["POST"])
 @authentication_classes([RoleTokenAuthentication])
 @permission_classes([IsAuthenticated])
-def complete_order_delivery(request, conversation_id):
+def complete_order_delivery(request, message_id=None, conversation_id=None):
     """Mark an order as delivered."""
     try:
-        conv = Conversation.objects.filter(id=conversation_id).first()
+        target_id = message_id or conversation_id or request.data.get("message_id")
+        msg = ChatMessage.objects.filter(id=target_id).first()
+        if not msg and target_id:
+            msg = ChatMessage.objects.filter(conversation_id=target_id).order_by("-id").first()
+        if not msg:
+            return Response({"error": "Order message not found"}, status=status.HTTP_404_NOT_FOUND)
+        conv = msg.conversation
         if not conv:
             return Response({"error": "Conversation not found"}, status=status.HTTP_404_NOT_FOUND)
         if not _can_access_conversation(request, conv):
             return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
-        order_msg = ChatMessage.objects.filter(conversation=conv, message_type="order").order_by("-created_at").first()
-        if order_msg:
-            order_msg.order_status = "delivered"
-            order_msg.save()
-        return Response({"success": True, "conversation_id": conversation_id})
+
+        msg.order_status = "delivered"
+        msg.is_coins_refunded = True
+        msg.save(update_fields=["order_status", "is_coins_refunded"])
+
+        if conv.enduser:
+            try:
+                EndUser.objects.filter(endsuerid=conv.enduser.endsuerid).update(
+                    completed_orders_count=models.F("completed_orders_count") + 1
+                )
+            except Exception:
+                pass
+
+        return Response({
+            "success": True,
+            "message_id": msg.id,
+            "conversation_id": conv.id,
+            "order_status": "delivered",
+        })
     except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(["POST"])
 @authentication_classes([RoleTokenAuthentication])
 @permission_classes([IsAuthenticated])
-def toggle_trusted_customer(request, conversation_id):
+def toggle_trusted_customer(request, conversation_id=None, enduser_id=None):
     """Toggle trusted status of a customer in a conversation."""
     try:
-        conv = Conversation.objects.filter(id=conversation_id).first()
+        conv = None
+        if conversation_id:
+            conv = Conversation.objects.filter(id=conversation_id).first()
+        elif enduser_id:
+            conv = Conversation.objects.filter(enduser_id=enduser_id).first()
         if not conv:
             return Response({"error": "Conversation not found"}, status=status.HTTP_404_NOT_FOUND)
         current = getattr(conv, "trusted_customer", False) or False
@@ -1397,17 +1492,25 @@ def toggle_trusted_customer(request, conversation_id):
 @api_view(["POST"])
 @authentication_classes([RoleTokenAuthentication])
 @permission_classes([IsAuthenticated])
-def forfeit_order_coins(request, order_id):
+def forfeit_order_coins(request, message_id=None, order_id=None):
     """Forfeit coins associated with an order."""
     try:
-        order = SupplierOrder.objects.filter(id=order_id).first()
-        if not order:
-            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
-        coins = getattr(order, "coins_deducted", 0) or 0
-        if coins > 0:
-            order.coins_deducted = 0
-            order.save()
-        return Response({"success": True, "forfeited_coins": coins})
+        target_id = message_id or order_id or request.data.get("message_id")
+        msg = ChatMessage.objects.filter(id=target_id).first()
+        if msg:
+            msg.order_status = "forfeited"
+            coins = getattr(msg, "commitment_coins_locked", 0) or 0
+            msg.save(update_fields=["order_status"])
+            return Response({"success": True, "forfeited_coins": coins})
+
+        order = SupplierOrder.objects.filter(id=target_id).first()
+        if order:
+            coins = getattr(order, "coins_deducted", 0) or 0
+            if coins > 0:
+                order.coins_deducted = 0
+                order.save()
+            return Response({"success": True, "forfeited_coins": coins})
+        return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1415,18 +1518,37 @@ def forfeit_order_coins(request, order_id):
 @api_view(["POST"])
 @authentication_classes([RoleTokenAuthentication])
 @permission_classes([IsAuthenticated])
-def company_pack_order(request, conversation_id):
+def company_pack_order(request, message_id=None, conversation_id=None):
     """Mark order as packed by company."""
     try:
-        conv = Conversation.objects.filter(id=conversation_id).first()
+        from django.utils import timezone
+        import datetime
+
+        target_id = message_id or conversation_id or request.data.get("message_id")
+        msg = ChatMessage.objects.filter(id=target_id).first()
+        if not msg and target_id:
+            msg = ChatMessage.objects.filter(conversation_id=target_id).order_by("-id").first()
+        if not msg:
+            return Response({"error": "Order message not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        conv = msg.conversation
         if not conv:
             return Response({"error": "Conversation not found"}, status=status.HTTP_404_NOT_FOUND)
+
         if not _can_access_conversation(request, conv):
             return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
-        order_msg = ChatMessage.objects.filter(conversation=conv, message_type="order").order_by("-created_at").first()
-        if order_msg:
-            order_msg.order_status = "packed"
-            order_msg.save()
-        return Response({"success": True, "conversation_id": conversation_id})
+
+        msg.order_status = "packed"
+        msg.is_pack_confirmed = True
+        msg.pack_confirmed_at = timezone.now()
+        msg.expires_at = timezone.now() + datetime.timedelta(hours=6)
+        msg.save(update_fields=["order_status", "is_pack_confirmed", "pack_confirmed_at", "expires_at"])
+
+        return Response({
+            "success": True,
+            "message_id": msg.id,
+            "conversation_id": conv.id,
+            "order_status": "packed",
+        })
     except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

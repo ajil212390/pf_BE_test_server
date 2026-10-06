@@ -584,19 +584,25 @@ def _commitment_coin_cost(bill_amount, extension_count):
     """
     Step 2.3: B2B Commitment Due Date Extension Formula
     Rate Escalation:
-      - 1st extension (count=0): 10% of bill amount
+      - 1st extension (count=0): FREE upfront (0 tokens). 10% fee to supplier only if commitment broken.
       - 2nd extension (count=1): 12% of bill amount
       - 3rd extension (count=2): 13% of bill amount
-      - Max 3 extensions per bill.
+      - 4th+ extension (count>=3): escalates +1% per extension (14%, 15%, 16%...).
+      - No maximum extension limit.
     """
-    if extension_count >= 3:
-        raise ValueError('Maximum 3 extensions reached. Bill must be settled.')
-    rates = [0.10, 0.12, 0.13]
-    rate = rates[min(extension_count, 2)]
+    if extension_count <= 0:
+        return 0
+    elif extension_count == 1:
+        rate = 0.12
+    elif extension_count == 2:
+        rate = 0.13
+    else:
+        rate = 0.13 + (extension_count - 2) * 0.01
+
     amt = float(bill_amount or 0)
     if amt <= 0:
         amt = 1000.0
-    return max(10, int(round(amt * rate)))
+    return max(0, int(round(amt * rate)))
 
 
 def _supplier_local_ids(supplier_user_id):
@@ -643,10 +649,9 @@ def bill_commitments_view(request, bill_no=None):
         charge_company_wallet = data.get('charge_company_wallet') is True
 
         if request.user.role == 'company':
-            if not charge_company_wallet:
-                return Response({'error': 'Company extensions must include the wallet charge.'}, status=status.HTTP_400_BAD_REQUEST)
             if not company_id or int(company_id) != request.user.company_id:
                 return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
+            charge_company_wallet = True
         elif request.user.role == 'supplier':
             if charge_company_wallet:
                 return Response({'error': 'Supplier commitments cannot charge a company wallet.'}, status=status.HTTP_403_FORBIDDEN)
@@ -678,35 +683,31 @@ def bill_commitments_view(request, bill_no=None):
                             supplier_id=supplier_id,
                         ).count()
 
-                        if extension_count >= 3:
-                            return Response({
-                                'error': 'Maximum 3 extensions reached for this bill. Bill must be settled.'
-                            }, status=status.HTTP_400_BAD_REQUEST)
-
-                        ext_days = 10
+                        # No maximum extension limit per user requirement
                         bill_amt = float(bill.supplierbillamount or bill.balance or 0)
                         coin_cost = _commitment_coin_cost(bill_amt, extension_count)
                         current_balance = getattr(company, 'premium_tokens_balance', 0) or 0
 
-                        if current_balance < coin_cost:
-                            return Response({
-                                'success': False,
-                                'error': f'Insufficient Premium Tokens. Required: {coin_cost}, Available: {current_balance}',
-                                'coins_balance': current_balance,
-                                'premium_tokens_balance': current_balance,
-                                'required': coin_cost,
-                            }, status=status.HTTP_400_BAD_REQUEST)
+                        if coin_cost > 0:
+                            if current_balance < coin_cost:
+                                return Response({
+                                    'success': False,
+                                    'error': f'Insufficient Premium Tokens. Required: {coin_cost}, Available: {current_balance}',
+                                    'coins_balance': current_balance,
+                                    'premium_tokens_balance': current_balance,
+                                    'required': coin_cost,
+                                }, status=status.HTTP_400_BAD_REQUEST)
 
-                        # Deduct from company premium tokens
-                        company.premium_tokens_balance = current_balance - coin_cost
-                        company.save(update_fields=['premium_tokens_balance'])
+                            # Deduct from company premium tokens
+                            company.premium_tokens_balance = current_balance - coin_cost
+                            company.save(update_fields=['premium_tokens_balance'])
 
-                        # Step 2.4: Direct Token Transfer to Supplier
-                        supplier = Supplier.objects.filter(supplierid=supplier_id).first()
-                        if supplier:
-                            s_curr = getattr(supplier, 'premium_tokens_balance', 0) or 0
-                            supplier.premium_tokens_balance = s_curr + coin_cost
-                            supplier.save(update_fields=['premium_tokens_balance'])
+                            # Step 2.4: Direct Token Transfer to Supplier
+                            supplier = Supplier.objects.filter(supplierid=supplier_id).first()
+                            if supplier:
+                                s_curr = getattr(supplier, 'premium_tokens_balance', 0) or 0
+                                supplier.premium_tokens_balance = s_curr + coin_cost
+                                supplier.save(update_fields=['premium_tokens_balance'])
                     else:
                         if supplier_id not in _supplier_local_ids(request.user.supplier_user_id):
                             return Response({'error': 'Not authorized for this supplier bill.'}, status=status.HTTP_403_FORBIDDEN)

@@ -31,7 +31,8 @@ SECRET_KEY = os.environ.get('SECRET_KEY')
 if not SECRET_KEY:
     if IS_PRODUCTION:
         raise ImproperlyConfigured('SECRET_KEY must be configured in production.')
-    SECRET_KEY = get_random_secret_key()
+    # Persistent dev secret key so sessions and tokens stay valid across server restarts
+    SECRET_KEY = 'django-insecure-frontlly-catalog-dev-secret-key-persistent-2026-auth' 
 
 if IS_PRODUCTION:
     DEBUG = os.environ.get('DEBUG', 'False').strip().lower() in {'1', 'true', 'yes'}

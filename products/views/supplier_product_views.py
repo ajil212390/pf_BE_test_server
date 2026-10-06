@@ -65,10 +65,10 @@ def get_supplier_products(request, supplier_id):
                 | Q(supplierusergstnumber=local_supplier.suppliergst)
             ).first()
         elif role == 'executive':
-            requested_executive_id = request.user.executive_id
-            if executive_id and int(executive_id) != requested_executive_id:
+            requested_executive_id = request.user.executive_id or getattr(request.user, 'user_id', None)
+            if executive_id and requested_executive_id and int(executive_id) != requested_executive_id:
                 return Response({'error': 'Not authorized for this executive.'}, status=status.HTTP_403_FORBIDDEN)
-            executive_id = requested_executive_id
+            executive_id = requested_executive_id or (int(executive_id) if executive_id else None)
             try:
                 company_id = int(company_id)
             except (TypeError, ValueError):
@@ -80,10 +80,10 @@ def get_supplier_products(request, supplier_id):
                 return Response({'error': 'Executive is not allocated to this company.'}, status=status.HTTP_403_FORBIDDEN)
             supp_user = None
         elif role == 'manager':
-            requested_manager_id = request.user.manager_id
-            if manager_id and int(manager_id) != requested_manager_id:
+            requested_manager_id = request.user.manager_id or getattr(request.user, 'user_id', None)
+            if manager_id and requested_manager_id and int(manager_id) != requested_manager_id:
                 return Response({'error': 'Not authorized for this manager.'}, status=status.HTTP_403_FORBIDDEN)
-            manager_id = requested_manager_id
+            manager_id = requested_manager_id or (int(manager_id) if manager_id else None)
             try:
                 company_id = int(company_id)
             except (TypeError, ValueError):
@@ -211,9 +211,7 @@ def get_supplier_products(request, supplier_id):
         ).select_related('product', 'product__productcategoryid', 'product__productunitid')
 
         if company_id:
-            c_qs = queryset.filter(company_id=company_id)
-            if c_qs.exists():
-                queryset = c_qs
+            queryset = queryset.filter(company_id=company_id)
 
         data = []
         for sp in queryset:

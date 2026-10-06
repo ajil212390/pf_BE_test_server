@@ -85,6 +85,7 @@ def login_supplier_manager(request):
                 'access_token': issue_access_token(
                     'manager',
                     manager.manager_id,
+                    manager_id=manager.manager_id,
                     supplier_user_id=manager.supplier_user_id,
                 ),
                 'manager_id': manager.manager_id,

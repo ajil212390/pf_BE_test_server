@@ -105,6 +105,7 @@ def login_supplier_executive(request):
                 'access_token': issue_access_token(
                     'executive',
                     executive.executiveid,
+                    executive_id=executive.executiveid,
                     manager_id=executive.manager_id,
                     supplier_user_id=executive.supplier_user_id,
                 ),
