@@ -285,6 +285,7 @@ class SupplierProduct(models.Model):
         managed = True
         db_table = 'supplier_product'
         unique_together = (('supplier', 'product'),)
+        
 class Commitment(models.Model):
     commitment_id = models.AutoField(primary_key=True)
     bill_no = models.CharField(max_length=100, db_index=True)
@@ -329,3 +330,24 @@ class CoinTransaction(models.Model):
     class Meta:
         managed = False
         db_table = 'coin_transaction'
+
+
+class PremiumTokenTransaction(models.Model):
+    id = models.AutoField(primary_key=True)
+    company = models.ForeignKey(Company, on_delete=models.SET_NULL, null=True, blank=True, db_column='company_id', related_name='premium_token_transactions')
+    supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True, db_column='supplier_id', related_name='premium_token_transactions')
+    supplier_user_id = models.IntegerField(null=True, blank=True)
+    bill_no = models.CharField(max_length=100, null=True, blank=True, db_index=True)
+    bill_id = models.IntegerField(null=True, blank=True)
+    amount = models.IntegerField()
+    transaction_type = models.CharField(max_length=50, default='due_date_extension')
+    company_balance_after = models.IntegerField(null=True, blank=True)
+    supplier_balance_after = models.IntegerField(null=True, blank=True)
+    extension_days = models.IntegerField(null=True, blank=True)
+    executive_id = models.IntegerField(null=True, blank=True)
+    note = models.CharField(max_length=255, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        managed = False
+        db_table = 'premium_token_transaction'

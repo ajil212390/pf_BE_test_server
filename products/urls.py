@@ -1,4 +1,5 @@
-﻿from .views.supplier_views import bill_commitments_view
+from .views.due_date_extension_views import request_extension_otp_view, verify_and_extend_view
+from .views.supplier_views import bill_commitments_view
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
@@ -10,7 +11,7 @@ from .views import (
     admin_user_customer_supplier_overview,
     register_enduser, login_enduser, login_supplier,
     search_supplier_globally, search_local_supplier, get_available_suppliers, connect_supplier, supplier_bills, onboard_supplier, supplier_dashboard,
-    get_company_conversations, get_company_executive_conversations, get_enduser_conversations, get_executive_conversations, get_conversation_messages, get_conversation_details, send_message, send_order_message, get_or_create_company_buyer_profile, delete_message, update_order_status, update_supplier_order_status, delete_supplier_order, get_enduser_wallet, confirm_order_bill, complete_order_delivery, toggle_trusted_customer, company_pack_order, forfeit_order_coins, recharge_enduser_wallet, get_company_wallet, recharge_company_wallet, recharge_company_premium_wallet, deduct_company_wallet, get_supplier_wallet, recharge_supplier_wallet, deduct_supplier_wallet,
+    get_company_conversations, get_company_executive_conversations, get_enduser_conversations, get_executive_conversations, get_conversation_messages, get_conversation_details, send_message, send_order_message, get_or_create_company_buyer_profile, delete_message, update_order_status, update_supplier_order_status, delete_supplier_order, get_enduser_wallet, confirm_order_bill, complete_order_delivery, toggle_trusted_customer, company_pack_order, forfeit_order_coins, recharge_enduser_wallet, get_company_wallet, recharge_company_wallet, recharge_company_premium_wallet, deduct_company_wallet, get_supplier_wallet, recharge_supplier_wallet, deduct_supplier_wallet, get_company_premium_transactions, get_supplier_premium_transactions, get_enduser_transactions, get_company_transactions,
     delete_conversations, get_enduser_orders, get_company_orders,
     register_supplier_executive, login_supplier_executive,
     get_supplier_executives, allocate_company_to_executive,
@@ -123,4 +124,14 @@ urlpatterns = [
     path('supplier/wallet/<int:supplier_id>/', get_supplier_wallet),
     path('supplier/wallet/<int:supplier_id>/recharge/', recharge_supplier_wallet),
     path('supplier/wallet/<int:supplier_id>/deduct/', deduct_supplier_wallet),
+    path('company/wallet/<int:company_id>/premium-transactions/', get_company_premium_transactions),
+    path('company/wallet/<int:company_id>/transactions/', get_company_transactions),
+    path('enduser/wallet/<int:enduser_id>/transactions/', get_enduser_transactions),
+    path('supplier/wallet/<int:supplier_id>/premium-transactions/', get_supplier_premium_transactions),
+
+    # Phase 2 & 3: On-Field Bill Due Date Extension with OTP
+    path('commitments/request-extension-otp/', request_extension_otp_view, name='request_extension_otp'),
+    path('commitments/verify-and-extend/', verify_and_extend_view, name='verify_and_extend'),
+    path('supplier/bills/request-extension-otp/', request_extension_otp_view),
+    path('supplier/bills/verify-and-extend/', verify_and_extend_view),
 ]

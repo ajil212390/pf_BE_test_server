@@ -3,7 +3,7 @@ from django.db.models import Q
 from rest_framework import status
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from drf_spectacular.utils import extend_schema, OpenApiResponse, inline_serializer
 from rest_framework import serializers
 
@@ -452,9 +452,18 @@ def send_message(request):
         conversation.updated_at = msg.timestamp
         conversation.save()
 
+        # If company sends bill with tokens waived (non-token normal order), mark immediately confirmed
+        raw_text = (text_content or '').strip()
+        is_bill = 'order bill' in raw_text.lower() or '🧾' in raw_text or '[ref:#' in raw_text
+        is_tokens_waived = '[token_lock:waived]' in raw_text or 'tokens: waived' in raw_text.lower() or 'tokens: none' in raw_text.lower()
+        if is_bill and is_tokens_waived and sender_type == 'company':
+            msg.order_status = 'confirmed'
+            msg.is_customer_confirmed = True
+            msg.commitment_coins_locked = 0
+            msg.save(update_fields=['order_status', 'is_customer_confirmed', 'commitment_coins_locked'])
+
         # Trigger Push Notification
         try:
-            raw_text = (text_content or '').strip()
             is_bill = 'order bill' in raw_text.lower() or '🧾' in raw_text or '[ref:#' in raw_text
             if is_bill:
                 notify_bill_sent(conversation, raw_text)
@@ -960,11 +969,29 @@ def get_conversation_details(request, conversation_id=0):
         supp_id = None
         if conv and conv.executive:
             ex = conv.executive
-            supp_id = ex.supplier_user_id or (ex.manager.supplier_user_id if ex.manager else None)
+            supp_u = ex.supplier_user or (ex.manager.supplier_user if ex.manager else None)
+            if supp_u and conv.company:
+                local_s = Supplier.objects.filter(
+                    supplierphonenumber=supp_u.supplieruserphone,
+                    companyid=conv.company
+                ).first()
+                if local_s:
+                    supp_id = local_s.supplierid
+            if not supp_id:
+                supp_id = ex.supplier_user_id or (ex.manager.supplier_user_id if ex.manager else None)
         elif exec_id:
             se = SupplierExecutive.objects.filter(executiveid=exec_id).first()
             if se:
-                supp_id = se.supplier_user_id or (se.manager.supplier_user_id if se.manager else None)
+                supp_u = se.supplier_user or (se.manager.supplier_user if se.manager else None)
+                if supp_u and comp_id:
+                    local_s = Supplier.objects.filter(
+                        supplierphonenumber=supp_u.supplieruserphone,
+                        companyid_id=comp_id
+                    ).first()
+                    if local_s:
+                        supp_id = local_s.supplierid
+                if not supp_id:
+                    supp_id = se.supplier_user_id or (se.manager.supplier_user_id if se.manager else None)
 
         return Response({
             'conversation_id': conv.id if conv else int(conversation_id or 0),
@@ -1366,12 +1393,20 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
         if not _can_access_conversation(request, conv):
             return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
 
+        text = msg.text_content or ""
+        is_tokens_waived = "[token_lock:waived]" in text or "Tokens: Waived" in text or "Tokens: none" in text
+
         try:
-            required_coins = int(request.data.get("required_coins", 200))
+            req_param = request.data.get("required_coins")
+            if req_param is not None:
+                required_coins = int(req_param)
+            else:
+                required_coins = 0 if is_tokens_waived else 200
         except (ValueError, TypeError):
-            required_coins = 200
-        if required_coins < 0:
-            required_coins = 200
+            required_coins = 0 if is_tokens_waived else 200
+
+        if is_tokens_waived or required_coins < 0:
+            required_coins = 0
 
         with transaction.atomic():
             # Update ChatMessage status and locked tokens
@@ -1385,22 +1420,21 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
             if enduser:
                 enduser = EndUser.objects.select_for_update().filter(endsuerid=enduser.endsuerid).first()
                 if enduser:
-                    curr = enduser.coins_balance or 0
-                    enduser.coins_balance = max(0, curr - required_coins)
-                    enduser.save(update_fields=["coins_balance"])
-                    enduser_balance = enduser.coins_balance
-
-                    # Record transaction
-                    try:
-                        CoinTransaction.objects.create(
-                            end_user=enduser,
-                            amount=-required_coins,
-                            transaction_type="order_lock",
-                            reference_order_id=msg.id,
-                            note=f"Locked for pickup order #{msg.id}",
-                        )
-                    except Exception:
-                        pass
+                    if required_coins > 0:
+                        curr = enduser.coins_balance or 0
+                        enduser.coins_balance = max(0, curr - required_coins)
+                        enduser.save(update_fields=["coins_balance"])
+                        try:
+                            CoinTransaction.objects.create(
+                                end_user=enduser,
+                                amount=-required_coins,
+                                transaction_type="order_lock",
+                                reference_order_id=msg.id,
+                                note=f"Locked for pickup order #{msg.id}",
+                            )
+                        except Exception:
+                            pass
+                    enduser_balance = enduser.coins_balance or 0
 
             # Credit to company normal tokens (coins_balance)
             company_balance = 0
@@ -1408,9 +1442,10 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
             if company:
                 company = Company.objects.select_for_update().filter(companyid=company.companyid).first()
                 if company:
-                    company.coins_balance = (company.coins_balance or 0) + required_coins
-                    company.save(update_fields=["coins_balance"])
-                    company_balance = company.coins_balance
+                    if required_coins > 0:
+                        company.coins_balance = (company.coins_balance or 0) + required_coins
+                        company.save(update_fields=["coins_balance"])
+                    company_balance = company.coins_balance or 0
 
         return Response({
             "success": True,
@@ -1538,10 +1573,21 @@ def company_pack_order(request, message_id=None, conversation_id=None):
         if not _can_access_conversation(request, conv):
             return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
 
+        text_cnt = (msg.text_content or '').lower()
+        is_tokens_waived = (
+            '[token_lock:waived]' in text_cnt
+            or 'tokens: waived' in text_cnt
+            or 'tokens: none' in text_cnt
+            or (getattr(msg, 'commitment_coins_locked', 0) == 0 and getattr(msg, 'is_customer_confirmed', False))
+        )
+
         msg.order_status = "packed"
         msg.is_pack_confirmed = True
         msg.pack_confirmed_at = timezone.now()
-        msg.expires_at = timezone.now() + datetime.timedelta(hours=6)
+        if not is_tokens_waived:
+            msg.expires_at = timezone.now() + datetime.timedelta(hours=6)
+        else:
+            msg.expires_at = None
         msg.save(update_fields=["order_status", "is_pack_confirmed", "pack_confirmed_at", "expires_at"])
 
         return Response({
@@ -1552,3 +1598,217 @@ def company_pack_order(request, message_id=None, conversation_id=None):
         })
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_company_premium_transactions(request, company_id):
+    """
+    Returns the transaction history from premium_token_transaction for the company.
+    """
+    try:
+        from products.models import PremiumTokenTransaction, Company, Supplier
+        txs = PremiumTokenTransaction.objects.filter(company_id=company_id).order_by('-created_at')[:100]
+        data = []
+        for tx in txs:
+            is_debit = tx.transaction_type in ['due_date_extension', 'commitment_extension', 'deduct']
+            supplier_obj = Supplier.objects.filter(supplierid=tx.supplier_id).first() if tx.supplier_id else None
+            supplier_name = supplier_obj.suppliername if supplier_obj else (f'Supplier #{tx.supplier_id}' if tx.supplier_id else 'System')
+            data.append({
+                'id': f'ptt_{tx.id}',
+                'amount': -abs(tx.amount) if is_debit else abs(tx.amount),
+                'type': tx.transaction_type,
+                'reason': tx.note or ('Due Date Extension Fee' if is_debit else 'Premium Token Recharge'),
+                'bill_no': tx.bill_no,
+                'bill_id': tx.bill_id,
+                'supplier_id': tx.supplier_id,
+                'supplier_name': supplier_name,
+                'balance_after': tx.company_balance_after,
+                'extension_days': tx.extension_days,
+                'reference_id': tx.bill_no or f'PTT-{tx.id}',
+                'timestamp': tx.created_at.isoformat() if tx.created_at else None,
+                'token_type': 'premium',
+            })
+        return Response({'success': True, 'transactions': data}, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f'Error fetching company premium transactions: {e}', exc_info=True)
+        return Response({'success': False, 'error': str(e), 'transactions': []}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_supplier_premium_transactions(request, supplier_id):
+    """
+    Returns the transaction history from premium_token_transaction for the supplier.
+    """
+    try:
+        from products.models import PremiumTokenTransaction, Company, Supplieruser
+        s_id = supplier_id
+        if not Supplier.objects.filter(supplierid=supplier_id).exists():
+            su = Supplieruser.objects.filter(supplieruserid=supplier_id).first()
+            if su and su.supplierid:
+                s_id = su.supplierid.supplierid if hasattr(su.supplierid, 'supplierid') else su.supplierid
+
+        txs = PremiumTokenTransaction.objects.filter(
+            Q(supplier_id=s_id) | Q(supplier_id=supplier_id) | Q(supplier_user_id=supplier_id)
+        ).distinct().order_by('-created_at')[:100]
+        data = []
+        for tx in txs:
+            is_credit = tx.transaction_type in ['due_date_extension', 'commitment_extension', 'recharge', 'credit']
+            comp_obj = Company.objects.filter(companyid=tx.company_id).first() if tx.company_id else None
+            company_name = comp_obj.companyname if comp_obj else (f'Company #{tx.company_id}' if tx.company_id else 'System')
+            data.append({
+                'id': f'ptt_{tx.id}',
+                'amount': abs(tx.amount) if is_credit else -abs(tx.amount),
+                'type': tx.transaction_type,
+                'reason': tx.note or 'Fee received from Company for Extension',
+                'bill_no': tx.bill_no,
+                'bill_id': tx.bill_id,
+                'company_id': tx.company_id,
+                'company_name': company_name,
+                'balance_after': tx.supplier_balance_after,
+                'extension_days': tx.extension_days,
+                'reference_id': tx.bill_no or f'PTT-{tx.id}',
+                'timestamp': tx.created_at.isoformat() if tx.created_at else None,
+                'token_type': 'premium',
+            })
+        return Response({'success': True, 'transactions': data}, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f'Error fetching supplier premium transactions: {e}', exc_info=True)
+        return Response({'success': False, 'error': str(e), 'transactions': []}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_enduser_transactions(request, enduser_id):
+    """
+    Returns transaction history from CoinTransaction for the given enduser.
+    """
+    try:
+        from products.models import CoinTransaction, EndUser
+        txs = CoinTransaction.objects.filter(end_user_id=enduser_id).order_by('-transaction_id')[:100]
+        data = []
+        for tx in txs:
+            data.append({
+                'id': f'ct_{tx.transaction_id}',
+                'amount': tx.amount,
+                'type': tx.transaction_type or ('order_lock' if tx.amount < 0 else 'credit'),
+                'reason': tx.note or ('Order Commitment Lock' if tx.amount < 0 else 'Token Credit'),
+                'reference_id': f'ORD-{tx.reference_order_id}' if tx.reference_order_id else f'TX-{tx.transaction_id}',
+                'timestamp': tx.created_at.isoformat() if tx.created_at else None,
+                'token_type': 'standard',
+            })
+
+        if not data:
+            eu = EndUser.objects.filter(endsuerid=enduser_id).first()
+            if eu and (eu.coins_balance or 0) > 0:
+                data.append({
+                    'id': f'init_eu_{enduser_id}',
+                    'amount': eu.coins_balance,
+                    'type': 'welcome_bonus',
+                    'reason': 'Frontlly Welcome Tokens',
+                    'reference_id': f'WELCOME-{enduser_id}',
+                    'timestamp': None,
+                    'token_type': 'standard',
+                })
+        return Response({'success': True, 'transactions': data}, status=status.HTTP_200_OK)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f'Error fetching enduser transactions: {e}', exc_info=True)
+        return Response({'success': False, 'error': str(e), 'transactions': []}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_company_transactions(request, company_id):
+    """
+    Returns unified transaction history for Company:
+    - Standard tokens from confirmed ChatMessages with commitment tokens locked
+    - Premium tokens from PremiumTokenTransaction
+    """
+    try:
+        from products.models import ChatMessage, PremiumTokenTransaction, Company, Supplier
+        from django.utils import timezone
+
+        data = []
+        comp = Company.objects.filter(companyid=company_id).first()
+
+        # 1. Standard Token transactions (Order commitment tokens received)
+        order_msgs = ChatMessage.objects.filter(
+            conversation__company_id=company_id,
+            commitment_coins_locked__gt=0
+        ).order_by('-id')[:100]
+
+        has_standard = False
+        for msg in order_msgs:
+            has_standard = True
+            cust_name = ''
+            if msg.conversation and msg.conversation.enduser:
+                cust_name = msg.conversation.enduser.endusername or ''
+            data.append({
+                'id': f'ord_tx_{msg.id}',
+                'amount': msg.commitment_coins_locked or 0,
+                'type': 'order_credit',
+                'reason': f'Commitment tokens received for Order #{msg.id}' + (f' ({cust_name})' if cust_name else ''),
+                'reference_id': f'ORD-{msg.id}',
+                'timestamp': msg.timestamp.isoformat() if msg.timestamp else None,
+                'token_type': 'standard',
+            })
+
+        if not has_standard and comp and (comp.coins_balance or 0) > 0:
+            data.append({
+                'id': f'init_comp_std_{company_id}',
+                'amount': comp.coins_balance,
+                'type': 'recharge',
+                'reason': 'Frontlly Standard Tokens Recharge',
+                'reference_id': f'CMP-{company_id}-STD',
+                'timestamp': timezone.now().isoformat(),
+                'token_type': 'standard',
+            })
+
+        # 2. Premium Token transactions
+        has_premium = False
+        pt_txs = PremiumTokenTransaction.objects.filter(company_id=company_id).order_by('-created_at')[:100]
+        for tx in pt_txs:
+            has_premium = True
+            is_debit = tx.transaction_type in ['due_date_extension', 'commitment_extension', 'deduct']
+            supplier_obj = Supplier.objects.filter(supplierid=tx.supplier_id).first() if tx.supplier_id else None
+            supplier_name = supplier_obj.suppliername if supplier_obj else (f'Supplier #{tx.supplier_id}' if tx.supplier_id else 'System')
+            data.append({
+                'id': f'ptt_{tx.id}',
+                'amount': -abs(tx.amount) if is_debit else abs(tx.amount),
+                'type': tx.transaction_type,
+                'reason': tx.note or ('Due Date Extension Fee' if is_debit else 'Premium Token Recharge'),
+                'bill_no': tx.bill_no,
+                'bill_id': tx.bill_id,
+                'supplier_id': tx.supplier_id,
+                'supplier_name': supplier_name,
+                'balance_after': tx.company_balance_after,
+                'extension_days': tx.extension_days,
+                'reference_id': tx.bill_no or f'PTT-{tx.id}',
+                'timestamp': tx.created_at.isoformat() if tx.created_at else None,
+                'token_type': 'premium',
+            })
+
+        prem_bal = getattr(comp, 'premium_tokens_balance', 0) if comp else 0
+        if not has_premium and prem_bal and prem_bal > 0:
+            data.append({
+                'id': f'init_comp_prem_{company_id}',
+                'amount': prem_bal,
+                'type': 'recharge',
+                'reason': 'B2B Extension Wallet Recharge',
+                'reference_id': f'CMP-{company_id}-PREM',
+                'timestamp': timezone.now().isoformat(),
+                'token_type': 'premium',
+            })
+
+        # Sort combined transactions descending
+        def get_sort_key(x):
+            return x.get('timestamp') or ''
+        data.sort(key=get_sort_key, reverse=True)
+
+        return Response({'success': True, 'transactions': data}, status=status.HTTP_200_OK)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f'Error fetching company transactions: {e}', exc_info=True)
+        return Response({'success': False, 'error': str(e), 'transactions': []}, status=status.HTTP_400_BAD_REQUEST)

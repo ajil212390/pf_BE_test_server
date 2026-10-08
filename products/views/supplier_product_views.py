@@ -46,6 +46,9 @@ def get_supplier_products(request, supplier_id):
         manager_id = request.GET.get('manager_id')
         role = request.user.role
 
+        supp_user = None
+        supplier = None
+
         if role == 'company':
             try:
                 requested_company_id = int(company_id)
@@ -54,16 +57,52 @@ def get_supplier_products(request, supplier_id):
             if requested_company_id != request.user.company_id:
                 return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
             company_id = request.user.company_id
-            local_supplier = Supplier.objects.filter(
-                supplierid=supplier_id,
-                companyid_id=company_id,
-            ).first()
-            if not local_supplier:
+
+            # 1. If executive_id provided, resolve supplier through the executive
+            if executive_id:
+                exe = SupplierExecutive.objects.select_related('manager', 'supplier_user').filter(executiveid=executive_id).first()
+                if exe:
+                    supp_user = exe.supplier_user or (exe.manager.supplier_user if exe.manager else None)
+                    if supp_user:
+                        supplier = Supplier.objects.filter(
+                            Q(supplierphonenumber=supp_user.supplieruserphone)
+                            | (Q(suppliergst=supp_user.supplierusergst) if getattr(supp_user, 'supplierusergst', None) else Q())
+                            | (Q(suppliergst=supp_user.supplierusergstnumber) if getattr(supp_user, 'supplierusergstnumber', None) else Q()),
+                            companyid_id=company_id,
+                        ).first()
+
+            # 2. Check local supplier by supplier_id in this company
+            if not supplier and supplier_id and int(supplier_id) > 0:
+                supplier = Supplier.objects.filter(
+                    supplierid=supplier_id,
+                    companyid_id=company_id,
+                ).first()
+
+            # 3. Check if supplier_id matches a Supplieruser ID
+            if not supplier and supplier_id and int(supplier_id) > 0:
+                su = Supplieruser.objects.filter(supplieruserid=supplier_id).first()
+                if su:
+                    supp_user = su
+                    supplier = Supplier.objects.filter(
+                        Q(supplierphonenumber=su.supplieruserphone)
+                        | (Q(suppliergst=su.supplierusergst) if getattr(su, 'supplierusergst', None) else Q())
+                        | (Q(suppliergst=su.supplierusergstnumber) if getattr(su, 'supplierusergstnumber', None) else Q()),
+                        companyid_id=company_id,
+                    ).first()
+
+            # 4. Check if supplier_id matches a Supplier record from another company
+            if not supplier and supplier_id and int(supplier_id) > 0:
+                other_supp = Supplier.objects.filter(supplierid=supplier_id).first()
+                if other_supp:
+                    supplier = Supplier.objects.filter(
+                        Q(supplierphonenumber=other_supp.supplierphonenumber)
+                        | (Q(suppliergst=other_supp.suppliergst) if other_supp.suppliergst else Q()),
+                        companyid_id=company_id,
+                    ).first() or other_supp
+
+            if not supplier and not supp_user:
                 return Response({'error': 'Supplier is not connected to this company.'}, status=status.HTTP_404_NOT_FOUND)
-            supp_user = Supplieruser.objects.filter(
-                Q(supplieruserphone=local_supplier.supplierphonenumber)
-                | Q(supplierusergstnumber=local_supplier.suppliergst)
-            ).first()
+
         elif role == 'executive':
             requested_executive_id = request.user.executive_id or getattr(request.user, 'user_id', None)
             if executive_id and requested_executive_id and int(executive_id) != requested_executive_id:
@@ -78,7 +117,10 @@ def get_supplier_products(request, supplier_id):
                 company_id=company_id,
             ).exists():
                 return Response({'error': 'Executive is not allocated to this company.'}, status=status.HTTP_403_FORBIDDEN)
-            supp_user = None
+            exe = SupplierExecutive.objects.select_related('manager', 'supplier_user').filter(executiveid=executive_id).first()
+            if exe:
+                supp_user = exe.supplier_user or (exe.manager.supplier_user if exe.manager else None)
+
         elif role == 'manager':
             requested_manager_id = request.user.manager_id or getattr(request.user, 'user_id', None)
             if manager_id and requested_manager_id and int(manager_id) != requested_manager_id:
@@ -93,7 +135,10 @@ def get_supplier_products(request, supplier_id):
                 company_id=company_id,
             ).exists():
                 return Response({'error': 'This manager has no executive allocated to the company.'}, status=status.HTTP_403_FORBIDDEN)
-            supp_user = None
+            mgr = SupplierManager.objects.select_related('supplier_user').filter(manager_id=manager_id).first()
+            if mgr:
+                supp_user = mgr.supplier_user
+
         elif role == 'supplier':
             if int(supplier_id) not in {request.user.supplier_user_id, request.user.supplier_id}:
                 return Response({'error': 'Not authorized for this supplier.'}, status=status.HTTP_403_FORBIDDEN)
@@ -102,29 +147,19 @@ def get_supplier_products(request, supplier_id):
                 company_id = int(company_id)
             except (TypeError, ValueError):
                 return Response({'error': 'A company context is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
         elif role == 'admin':
             if not company_id:
                 return Response({'error': 'A company context is required.'}, status=status.HTTP_400_BAD_REQUEST)
+            if supplier_id and int(supplier_id) > 0:
+                supp_user = Supplieruser.objects.filter(supplieruserid=supplier_id).first()
+                if not supp_user:
+                    supplier = Supplier.objects.filter(supplierid=supplier_id).first()
         else:
             return Response({'error': 'Not authorized to view supplier products.'}, status=status.HTTP_403_FORBIDDEN)
 
-        # 1. Resolve Supplieruser context from executive_id, manager_id, or supplier_id
-        if role == 'executive':
-            exe = SupplierExecutive.objects.select_related('manager', 'supplier_user').filter(executiveid=executive_id).first()
-            if exe:
-                supp_user = exe.supplier_user or (exe.manager.supplier_user if exe.manager else None)
-        elif role == 'manager':
-            mgr = SupplierManager.objects.select_related('supplier_user').filter(manager_id=manager_id).first()
-            if mgr:
-                supp_user = mgr.supplier_user
-
-        if role == 'admin' and not supp_user and supplier_id:
-            supp_user = Supplieruser.objects.filter(supplieruserid=supplier_id).first()
-
-        # 2. Resolve Supplier record
-        supplier = None
-        if company_id:
-            # If we know the supplier_user, find the supplier record for THIS company
+        # 2. Resolve Supplier record if not yet resolved
+        if not supplier and company_id:
             if supp_user:
                 supp_q = Q(companyid=company_id)
                 filter_q = Q(supplierphonenumber=supp_user.supplieruserphone)
@@ -134,15 +169,12 @@ def get_supplier_products(request, supplier_id):
                     filter_q |= Q(suppliergst=supp_user.supplierusergstnumber)
                 if supp_user.supplierusername:
                     filter_q |= Q(suppliername__iexact=supp_user.supplierusername)
-                
                 supplier = Supplier.objects.filter(supp_q & filter_q).first()
 
-            # If not found via supp_user, check if supplier_id matches a Supplier in this company
-            if not supplier and supplier_id:
+            if not supplier and supplier_id and int(supplier_id) > 0:
                 supplier = Supplier.objects.filter(supplierid=supplier_id, companyid=company_id).first()
 
-            # If supplier_id matches a Supplier from ANOTHER company, resolve counterpart in this company
-            if not supplier and supplier_id:
+            if not supplier and supplier_id and int(supplier_id) > 0:
                 other_supp = Supplier.objects.filter(supplierid=supplier_id).first()
                 if other_supp:
                     supp_q = Q(companyid=company_id)
@@ -151,82 +183,78 @@ def get_supplier_products(request, supplier_id):
                         filter_q |= Q(suppliergst=other_supp.suppliergst)
                     if other_supp.suppliername:
                         filter_q |= Q(suppliername__iexact=other_supp.suppliername)
-                    supplier = Supplier.objects.filter(supp_q & filter_q).first()
+                    supplier = Supplier.objects.filter(supp_q & filter_q).first() or other_supp
 
-        # Fallback if no company_id provided or company-specific lookup didn't find one
-        if not supplier and supplier_id:
-            supplier = Supplier.objects.filter(supplierid=supplier_id).first()
         if not supplier and supp_user:
             supplier = Supplier.objects.filter(supplierphonenumber=supp_user.supplieruserphone).first()
 
-        if not supplier:
-            if role in ('executive', 'manager') and company_id:
-                company_products = Products.objects.filter(
-                    companyid=company_id
-                ).select_related('productcategoryid', 'productunitid')
-                data = []
-                for p in company_products:
-                    cat_name, unit_name = _get_product_taxonomy(p)
-                    data.append({
-                        'id': None,
-                        'supplier_product_id': None,
-                        'supplierproductid': None,
-                        'product_id': p.productid,
-                        'productid': p.productid,
-                        'supplier_id': None,
-                        'supplierid': None,
-                        'company_id': company_id,
-                        'companyid': company_id,
-                        'product_name': p.productname,
-                        'product_price': float(p.productprice or 0),
-                        'supplier_price': float(p.productprice or 0),
-                        'is_active': True,
-                        'category_name': cat_name,
-                        'unit': unit_name,
-                    })
-                return Response(data, status=status.HTTP_200_OK)
-            return Response({'error': 'Supplier not found'}, status=status.HTTP_404_NOT_FOUND)
+        # 3. Collect all supplier IDs belonging to this supplier identity
+        matching_supplier_ids = []
+        if supplier:
+            matching_supplier_ids.append(supplier.supplierid)
+            if supplier.supplierphonenumber:
+                matching_supplier_ids.extend(
+                    Supplier.objects.filter(supplierphonenumber=supplier.supplierphonenumber).values_list('supplierid', flat=True)
+                )
+            if supplier.suppliergst:
+                matching_supplier_ids.extend(
+                    Supplier.objects.filter(suppliergst=supplier.suppliergst).values_list('supplierid', flat=True)
+                )
+            if supplier.suppliername:
+                matching_supplier_ids.extend(
+                    Supplier.objects.filter(suppliername=supplier.suppliername).values_list('supplierid', flat=True)
+                )
 
-        # 3. Fetch all supplier IDs belonging to this supplier identity
-        matching_supplier_ids = [supplier.supplierid]
-        if supp_user and role != 'company':
-            matching_ids = list(Supplier.objects.filter(supplierphonenumber=supp_user.supplieruserphone).values_list('supplierid', flat=True))
-            matching_supplier_ids.extend(matching_ids)
-        if supplier.supplierphonenumber:
-            matching_ids = list(Supplier.objects.filter(supplierphonenumber=supplier.supplierphonenumber).values_list('supplierid', flat=True))
-            matching_supplier_ids.extend(matching_ids)
-        if supplier.suppliergst:
-            matching_ids = list(Supplier.objects.filter(suppliergst=supplier.suppliergst).values_list('supplierid', flat=True))
-            matching_supplier_ids.extend(matching_ids)
-        if supplier.suppliername:
-            matching_ids_name = list(Supplier.objects.filter(suppliername=supplier.suppliername).values_list('supplierid', flat=True))
-            matching_supplier_ids.extend(matching_ids_name)
+        if supp_user:
+            matching_supplier_ids.extend(
+                Supplier.objects.filter(supplierphonenumber=supp_user.supplieruserphone).values_list('supplierid', flat=True)
+            )
+            if getattr(supp_user, 'supplierusergst', None):
+                matching_supplier_ids.extend(
+                    Supplier.objects.filter(suppliergst=supp_user.supplierusergst).values_list('supplierid', flat=True)
+                )
+            if getattr(supp_user, 'supplierusergstnumber', None):
+                matching_supplier_ids.extend(
+                    Supplier.objects.filter(suppliergst=supp_user.supplierusergstnumber).values_list('supplierid', flat=True)
+                )
 
         matching_supplier_ids = list(set(matching_supplier_ids))
 
-        # Fetch active products assigned to this supplier or its connected records
+        # 4. Fetch active products assigned to this supplier
+        # Priority 1: company-specific products for this supplier
         queryset = SupplierProduct.objects.filter(
             supplier_id__in=matching_supplier_ids,
+            company_id=company_id,
             is_active=True
         ).select_related('product', 'product__productcategoryid', 'product__productunitid')
 
-        if company_id:
-            queryset = queryset.filter(company_id=company_id)
+        # Priority 2: if no company-specific products, load all active products across this supplier's identity
+        if not queryset.exists():
+            queryset = SupplierProduct.objects.filter(
+                supplier_id__in=matching_supplier_ids,
+                is_active=True
+            ).select_related('product', 'product__productcategoryid', 'product__productunitid')
 
         data = []
+        seen_pids = set()
         for sp in queryset:
+            pid = sp.product.productid
+            if pid in seen_pids:
+                continue
+            seen_pids.add(pid)
+
             cat_name, unit_name = _get_product_taxonomy(sp.product)
 
             data.append({
                 'id': sp.id,
                 'supplier_product_id': sp.id,
                 'supplierproductid': sp.id,
-                'product_id': sp.product.productid,
-                'productid': sp.product.productid,
-                'supplier_id': sp.supplier_id,
-                'supplierid': sp.supplier_id,
-                'company_id': sp.company_id,
-                'companyid': sp.company_id,
+                'product_id': pid,
+                'productid': pid,
+                'supplier_id': supplier.supplierid if supplier else sp.supplier_id,
+                'supplierid': supplier.supplierid if supplier else sp.supplier_id,
+                'company_id': company_id or sp.company_id,
+                'companyid': company_id or sp.company_id,
                 'product_name': sp.product.productname,
                 'product_price': float(sp.product.productprice or 0),
                 'supplier_price': float(sp.supplier_price) if sp.supplier_price is not None else float(sp.product.productprice or 0),
@@ -235,12 +263,10 @@ def get_supplier_products(request, supplier_id):
                 'unit': unit_name,
             })
 
-        # Fallback: if no SupplierProduct records exist for this supplier+company,
-        # return all active company products so executives/managers can still place orders.
+        # Fallback for executives/managers if no products found at all
         if not data and role in ('executive', 'manager') and company_id:
             company_products = Products.objects.filter(
-                companyid=company_id,
-                
+                companyid=company_id
             ).select_related('productcategoryid', 'productunitid')
             for p in company_products:
                 cat_name, unit_name = _get_product_taxonomy(p)
@@ -250,8 +276,8 @@ def get_supplier_products(request, supplier_id):
                     'supplierproductid': None,
                     'product_id': p.productid,
                     'productid': p.productid,
-                    'supplier_id': supplier.supplierid,
-                    'supplierid': supplier.supplierid,
+                    'supplier_id': supplier.supplierid if supplier else None,
+                    'supplierid': supplier.supplierid if supplier else None,
                     'company_id': company_id,
                     'companyid': company_id,
                     'product_name': p.productname,
@@ -265,7 +291,6 @@ def get_supplier_products(request, supplier_id):
         return Response(data, status=status.HTTP_200_OK)
     except Supplier.DoesNotExist:
         return Response({'error': 'Supplier not found.'}, status=status.HTTP_404_NOT_FOUND)
-
 @extend_schema(
     request=inline_serializer(
         name='ManageSupplierProductsRequest',

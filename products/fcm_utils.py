@@ -123,7 +123,7 @@ def notify_chat_message(conversation, sender_type, text_content=None, has_audio=
             body = 'ðŸŽ¤ Voice message'
         elif has_image:
             msg_type = 'image'
-            body = 'ðŸ“· Photo'
+            body = 'Photo'
         else:
             msg_type = 'chat'
             body = preview if preview else 'Sent a message'
@@ -209,7 +209,7 @@ def notify_new_order(conversation, cart_summary):
         if conversation.executive_id:
             company_name = conversation.company.companyname if conversation.company else 'Store'
             title = company_name
-            order_body = chr(0x1F6CD) + chr(0xFE0F) + " Placed a new order\nTap to view details and accept."
+            order_body = "Placed a new order\nTap to view details and accept."
             order_data = {
                 'type': 'order',
                 'conversation_id': str(conversation.id),
@@ -232,7 +232,7 @@ def notify_new_order(conversation, cart_summary):
         company_id = conversation.company_id
         if company_id:
             title = buyer_name
-            order_body = chr(0x1F6CD) + chr(0xFE0F) + " Placed a new order\nTap to view details and accept."
+            order_body = "Placed a new order\nTap to view details and accept."
             order_data = {
                 'type': 'order',
                 'conversation_id': str(conversation.id),
@@ -262,13 +262,13 @@ def notify_order_status(conversation, status_val):
 
         status_clean = str(status_val).lower().strip()
         if status_clean == 'accepted':
-            body = "\u2705 Accepted your order"
+            body = "Accepted your order"
             notif_type = 'order_accepted'
         elif status_clean == 'declined':
-            body = "\u274c Declined your order"
+            body = "Declined your order"
             notif_type = 'order_declined'
         elif status_clean == 'cancelled':
-            body = "\u26a0\ufe0f Order was cancelled"
+            body = "Order was cancelled"
             notif_type = 'order_cancelled'
         else:
             body = "Order status: " + str(status_val).capitalize()
@@ -304,7 +304,7 @@ def notify_order_status(conversation, status_val):
         company_name = conversation.company.companyname if conversation.company else 'Store'
         title = company_name
         if status_clean == 'accepted':
-            body = "\u2705 Accepted your order\nThe store is preparing your invoice."
+            body = "Accepted your order\nThe store is preparing your invoice."
         status_data = {
             'type': notif_type,
             'conversation_id': str(conversation.id),
@@ -334,7 +334,7 @@ def notify_bill_sent(conversation, text_content=None):
             return
         company_name = conversation.company.companyname if conversation.company else 'Store'
         title = company_name # COMPANY NAME ON TOP
-        body = "ðŸ§¾ Order Invoice & Bill Ready\nTap to view details."
+        body = "Order Invoice & Bill Ready\nTap to view details."
 
         bill_data = {
             'type': 'bill',

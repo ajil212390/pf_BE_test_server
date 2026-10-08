@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 from ..serializers import CommitmentSerializer
 from rest_framework import status
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
@@ -256,21 +258,31 @@ def connect_supplier(request):
 
 @api_view(['GET'])
 def supplier_bills(request, supplier_user_id):
-    if request.user.role != 'supplier' or request.user.supplier_user_id != supplier_user_id:
-        return Response({'error': 'Not authorized for this supplier.'}, status=status.HTTP_403_FORBIDDEN)
-    try:
-        supplier_user = Supplieruser.objects.get(supplieruserid=supplier_user_id)
-    except Supplieruser.DoesNotExist:
-        return Response({'error': 'Supplier user not found.'}, status=status.HTTP_404_NOT_FOUND)
+    allowed_roles = ['supplier', 'executive', 'manager', 'company', 'admin']
+    user_role = getattr(request.user, 'role', None)
+    if user_role not in allowed_roles:
+        return Response({'error': 'Not authorized.'}, status=status.HTTP_403_FORBIDDEN)
 
-    # Find ALL matching supplier records across companies
+    supplier_user = Supplieruser.objects.filter(
+        Q(supplieruserid=supplier_user_id) | Q(supplierid=supplier_user_id)
+    ).first()
+
     suppliers_q = Q()
-    if supplier_user.supplierid_id:
-        suppliers_q |= Q(supplierid=supplier_user.supplierid_id)
-    if supplier_user.supplieruserphone:
-        suppliers_q |= Q(supplierphonenumber=supplier_user.supplieruserphone)
-    if supplier_user.supplierusergstnumber:
-        suppliers_q |= Q(suppliergst=supplier_user.supplierusergstnumber)
+    if supplier_user:
+        if supplier_user.supplierid_id:
+            suppliers_q |= Q(supplierid=supplier_user.supplierid_id)
+        if supplier_user.supplieruserphone:
+            suppliers_q |= Q(supplierphonenumber=supplier_user.supplieruserphone)
+        if supplier_user.supplierusergstnumber:
+            suppliers_q |= Q(suppliergst=supplier_user.supplierusergstnumber)
+    suppliers_q |= Q(supplierid=supplier_user_id)
+
+    company_id_param = request.query_params.get('company_id') or request.query_params.get('companyid')
+    if company_id_param:
+        try:
+            suppliers_q &= Q(companyid=int(company_id_param))
+        except (ValueError, TypeError):
+            pass
 
     suppliers = Supplier.objects.filter(suppliers_q).distinct() if suppliers_q else Supplier.objects.none()
 
@@ -285,10 +297,12 @@ def supplier_bills(request, supplier_user_id):
         # Pre-fetch latest commitments for all bills
         bill_nos = [b.supplierbillno for b in bills if b.supplierbillno]
         latest_commitments = {}
+        commitment_counts = {}
         if bill_nos:
             commits = Commitment.objects.filter(bill_no__in=bill_nos).order_by('created_at')
             for c in commits:
                 latest_commitments[c.bill_no] = c.new_due_date or (str(c.bill_due_date) if c.bill_due_date else '')
+                commitment_counts[c.bill_no] = commitment_counts.get(c.bill_no, 0) + 1
 
         result = []
         for supplier in suppliers:
@@ -330,6 +344,8 @@ def supplier_bills(request, supplier_user_id):
                     'balance': bal,
                     'type': bill.supplierbilltype or 'Purchase',
                     'narration': bill.narration or '',
+                    'extension_count': commitment_counts.get(b_no, 0),
+                    'extensions_count': commitment_counts.get(b_no, 0),
                     'company_id': company.companyid if company else None,
                     'company_name': company.companyname if company else '',
                     'company_phone': str(company.companyphonenumber) if company and company.companyphonenumber else '',
@@ -731,6 +747,28 @@ def bill_commitments_view(request, bill_no=None):
                     SupplierBill.objects.filter(supplierbillid=bill.supplierbillid).update(
                         supplierbillduedate=due_date_val,
                     )
+
+                if charge_company_wallet:
+                    try:
+                        from products.models import PremiumTokenTransaction
+                        cid = int(company_id) if company_id else None
+                        sid = int(supplier_id) if supplier_id else None
+                        bid = int(bill_id) if bill_id else (bill.supplierbillid if bill else None)
+                        PremiumTokenTransaction.objects.create(
+                            company_id=cid,
+                            supplier_id=sid,
+                            supplier_user_id=getattr(request.user, 'supplier_user_id', None),
+                            bill_no=b_no,
+                            bill_id=bid,
+                            amount=int(coin_cost or 0),
+                            transaction_type='due_date_extension',
+                            company_balance_after=getattr(company, 'premium_tokens_balance', None),
+                            supplier_balance_after=getattr(supplier, 'premium_tokens_balance', None) if supplier else None,
+                            extension_days=int(ext_days or 0),
+                            note=f'Bill #{b_no} extended by {ext_days} days (Direct Commitment)',
+                        )
+                    except Exception as ptt_e:
+                        logger.warning(f'Failed to log PremiumTokenTransaction: {ptt_e}')
 
             response_data = CommitmentSerializer(commitment).data
             if charge_company_wallet:
