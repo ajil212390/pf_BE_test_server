@@ -51,6 +51,27 @@ def parse_lat_lng(location_str):
 
 # ─── Supplier Executive Endpoints ─────────────────────────────────────────────
 
+@extend_schema(
+    summary="Register Supplier Executive",
+    description="Register a new field executive under a supplier manager. Requires manager role token.",
+    request=inline_serializer(
+        name="RegisterExecutiveRequest",
+        fields={
+            "manager_id": serializers.IntegerField(help_text="Manager ID who owns this executive"),
+            "executive_name": serializers.CharField(help_text="Full name of the executive"),
+            "executive_username": serializers.CharField(help_text="Login username"),
+            "executive_password": serializers.CharField(help_text="Login password"),
+            "executive_phone": serializers.CharField(required=False, help_text="Phone number"),
+        }
+    ),
+    responses={
+        201: OpenApiResponse(description="Executive registered — returns executive_id"),
+        400: OpenApiResponse(description="Username taken or validation error"),
+        403: OpenApiResponse(description="Not authorized"),
+        404: OpenApiResponse(description="Manager not found"),
+    },
+    tags=["Supplier Executive"]
+)
 @api_view(['POST'])
 def register_supplier_executive(request):
     data = request.data
@@ -89,6 +110,23 @@ def register_supplier_executive(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Login Supplier Executive",
+    description="Authenticates a supplier executive and returns an access token.",
+    request=inline_serializer(
+        name="LoginExecutiveRequest",
+        fields={
+            "username": serializers.CharField(help_text="Executive username"),
+            "password": serializers.CharField(help_text="Executive password"),
+        }
+    ),
+    responses={
+        200: OpenApiResponse(description="Login successful — returns access_token, executive_id, manager_id"),
+        401: OpenApiResponse(description="Incorrect password"),
+        404: OpenApiResponse(description="Username not found"),
+    },
+    tags=["Supplier Executive"]
+)
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([AllowAny])
@@ -121,6 +159,15 @@ def login_supplier_executive(request):
         return Response({'error': 'Username not found.'}, status=status.HTTP_404_NOT_FOUND)
 
 
+@extend_schema(
+    summary="Get Executives Under Manager",
+    description="Returns all executives registered under a specific manager.",
+    parameters=[
+        OpenApiParameter(name="manager_id", location=OpenApiParameter.PATH, description="Manager ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={200: OpenApiResponse(description="List of executives with allocated company count")},
+    tags=["Supplier Executive"]
+)
 @api_view(['GET'])
 def get_supplier_executives(request, manager_id):
     try:
@@ -140,6 +187,22 @@ def get_supplier_executives(request, manager_id):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Allocate Companies to Executive",
+    description="Assigns a list of companies to a supplier executive. Replaces existing allocations and creates conversations.",
+    request=inline_serializer(
+        name="AllocateCompanyRequest",
+        fields={
+            "executive_id": serializers.IntegerField(help_text="Executive ID to allocate companies to"),
+            "company_ids": serializers.ListField(child=serializers.IntegerField(), help_text="List of company IDs to allocate"),
+        }
+    ),
+    responses={
+        200: OpenApiResponse(description="Companies allocated successfully"),
+        404: OpenApiResponse(description="Executive not found"),
+    },
+    tags=["Supplier Executive"]
+)
 @api_view(['POST'])
 def allocate_company_to_executive(request):
     data = request.data
@@ -181,6 +244,18 @@ def allocate_company_to_executive(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Get Companies Allocated to Executive",
+    description="Returns all companies assigned to a specific executive, with local supplier info.",
+    parameters=[
+        OpenApiParameter(name="executive_id", location=OpenApiParameter.PATH, description="Executive ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={
+        200: OpenApiResponse(description="List of allocated companies with supplier info"),
+        404: OpenApiResponse(description="Executive not found"),
+    },
+    tags=["Supplier Executive"]
+)
 @api_view(['GET'])
 def get_allocated_companies(request, executive_id):
     try:
@@ -234,6 +309,31 @@ def get_allocated_companies(request, executive_id):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Place Order (Field Executive)",
+    description="Places a supplier order from the field. Validates executive allocation and GPS location.",
+    request=inline_serializer(
+        name="PlaceExecutiveOrderRequest",
+        fields={
+            "executive_id": serializers.IntegerField(help_text="Executive placing the order"),
+            "company_id": serializers.IntegerField(help_text="Company being ordered for"),
+            "supplier_id": serializers.IntegerField(required=False, help_text="Specific supplier ID (optional, resolved automatically)"),
+            "latitude": serializers.FloatField(required=False, help_text="Executive GPS latitude"),
+            "longitude": serializers.FloatField(required=False, help_text="Executive GPS longitude"),
+            "items": serializers.ListField(
+                child=serializers.DictField(),
+                help_text="List of order items: [{product_id, quantity, price}]"
+            ),
+        }
+    ),
+    responses={
+        201: OpenApiResponse(description="Order placed — returns order_id, company, supplier, total_amount"),
+        400: OpenApiResponse(description="Validation error"),
+        403: OpenApiResponse(description="Company not allocated to this executive"),
+        404: OpenApiResponse(description="Executive or company not found"),
+    },
+    tags=["Supplier Executive"]
+)
 @api_view(['POST'])
 def place_executive_order(request):
     data = request.data
@@ -337,6 +437,15 @@ def place_executive_order(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Get Orders for Manager",
+    description="Returns all orders placed by executives under a manager, with GPS verification info.",
+    parameters=[
+        OpenApiParameter(name="manager_id", location=OpenApiParameter.PATH, description="Manager ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={200: OpenApiResponse(description="List of orders with items, GPS data, and location verification")},
+    tags=["Supplier Executive"]
+)
 @api_view(['GET'])
 def get_supplier_manager_orders(request, manager_id):
     try:
@@ -401,6 +510,15 @@ def get_supplier_manager_orders(request, manager_id):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Get Connected Companies for Manager",
+    description="Returns all companies connected (as suppliers) to the supplier head linked to a manager.",
+    parameters=[
+        OpenApiParameter(name="manager_id", location=OpenApiParameter.PATH, description="Manager ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={200: OpenApiResponse(description="List of connected companies")},
+    tags=["Supplier Executive"]
+)
 @api_view(['GET'])
 def get_connected_companies_for_manager(request, manager_id):
     try:
@@ -447,6 +565,15 @@ def get_connected_companies_for_manager(request, manager_id):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Get Orders by Executive",
+    description="Returns all orders placed by a specific executive with GPS and product details.",
+    parameters=[
+        OpenApiParameter(name="executive_id", location=OpenApiParameter.PATH, description="Executive ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={200: OpenApiResponse(description="List of orders with items and location verification")},
+    tags=["Supplier Executive"]
+)
 @api_view(['GET'])
 def get_executive_orders(request, executive_id):
     try:
@@ -507,6 +634,18 @@ def get_executive_orders(request, executive_id):
 
 
 
+@extend_schema(
+    summary="Delete Supplier Executive",
+    description="Deletes a supplier executive and removes all their company allocations.",
+    parameters=[
+        OpenApiParameter(name="executive_id", location=OpenApiParameter.PATH, description="Executive ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={
+        200: OpenApiResponse(description="Executive deleted successfully"),
+        404: OpenApiResponse(description="Executive not found"),
+    },
+    tags=["Supplier Executive"]
+)
 @api_view(['DELETE', 'POST'])
 def delete_supplier_executive(request, executive_id):
     """Delete a Supplier Executive and clean up their allocations."""

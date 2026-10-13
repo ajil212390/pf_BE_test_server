@@ -1,7 +1,8 @@
-from rest_framework import status
+from rest_framework import status, serializers
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiTypes, inline_serializer
 
 from ..models import (
     ChatMessage,
@@ -20,6 +21,28 @@ from ..api_auth import issue_access_token
 # SUPPLIER MANAGER ENDPOINTS
 # ---------------------------------------------------------------------------
 
+@extend_schema(
+    summary="Register Supplier Manager",
+    description="Register a new manager under a supplier head (SupplierUser). Requires supplier role token.",
+    request=inline_serializer(
+        name="RegisterManagerRequest",
+        fields={
+            "supplier_user_id": serializers.IntegerField(help_text="Supplier head's user ID"),
+            "manager_name": serializers.CharField(help_text="Full name of the manager"),
+            "manager_username": serializers.CharField(help_text="Login username"),
+            "manager_password": serializers.CharField(help_text="Login password"),
+            "manager_phone": serializers.CharField(required=False, help_text="Phone number"),
+            "manager_area": serializers.CharField(required=False, help_text="Area/region managed"),
+        }
+    ),
+    responses={
+        201: OpenApiResponse(description="Manager registered — returns manager_id, manager_name"),
+        400: OpenApiResponse(description="Missing fields or username taken"),
+        403: OpenApiResponse(description="Not authorized"),
+        404: OpenApiResponse(description="Supplier head not found"),
+    },
+    tags=["Supplier Manager"]
+)
 @api_view(['POST'])
 def register_supplier_manager(request):
     """Register a new Supplier Manager under a Supplier Head (SupplierUser)."""
@@ -63,6 +86,24 @@ def register_supplier_manager(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Login Supplier Manager",
+    description="Authenticates a supplier manager and returns an access token with manager_id and supplier info.",
+    request=inline_serializer(
+        name="LoginManagerRequest",
+        fields={
+            "username": serializers.CharField(help_text="Manager username"),
+            "password": serializers.CharField(help_text="Manager password"),
+        }
+    ),
+    responses={
+        200: OpenApiResponse(description="Login successful — returns access_token, manager_id, supplier_name"),
+        400: OpenApiResponse(description="Missing credentials"),
+        401: OpenApiResponse(description="Incorrect password"),
+        404: OpenApiResponse(description="Username not found"),
+    },
+    tags=["Supplier Manager"]
+)
 @api_view(['POST'])
 @authentication_classes([])
 @permission_classes([AllowAny])
@@ -103,6 +144,15 @@ def login_supplier_manager(request):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Get Managers Under Supplier Head",
+    description="Returns all managers registered under a specific supplier head user.",
+    parameters=[
+        OpenApiParameter(name="supplier_user_id", location=OpenApiParameter.PATH, description="Supplier head user ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={200: OpenApiResponse(description="List of managers with executive count and order count")},
+    tags=["Supplier Manager"]
+)
 @api_view(['GET'])
 def get_supplier_managers(request, supplier_user_id):
     """Get all managers under a Supplier Head."""
@@ -129,6 +179,18 @@ def get_supplier_managers(request, supplier_user_id):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Manager Dashboard",
+    description="Returns full dashboard for a manager: executive list, order stats, and recent 50 orders with items.",
+    parameters=[
+        OpenApiParameter(name="manager_id", location=OpenApiParameter.PATH, description="Manager ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={
+        200: OpenApiResponse(description="Manager stats, executive list, and recent orders"),
+        404: OpenApiResponse(description="Manager not found"),
+    },
+    tags=["Supplier Manager"]
+)
 @api_view(['GET'])
 def get_manager_dashboard(request, manager_id):
     """Get full dashboard data for a Supplier Manager: executives, orders with items, stats."""
@@ -197,6 +259,18 @@ def get_manager_dashboard(request, manager_id):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+@extend_schema(
+    summary="Delete Supplier Manager",
+    description="Deletes a supplier manager and cascades deletion to their executives.",
+    parameters=[
+        OpenApiParameter(name="manager_id", location=OpenApiParameter.PATH, description="Manager ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={
+        200: OpenApiResponse(description="Manager deleted successfully"),
+        404: OpenApiResponse(description="Manager not found"),
+    },
+    tags=["Supplier Manager"]
+)
 @api_view(['DELETE'])
 def delete_supplier_manager(request, manager_id):
     """Delete a Supplier Manager (and cascade their executives)."""
