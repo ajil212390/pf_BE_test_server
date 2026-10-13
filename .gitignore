@@ -20,3 +20,7 @@ db.sqlite3
 # Local generated files
 media/
 *.xlsx
+*.sql
+
+# Platform-specific deployment files (not used)
+render.yaml
