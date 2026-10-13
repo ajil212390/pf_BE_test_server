@@ -1,7 +1,16 @@
-﻿import os
+import os
 import sys
-import firebase_admin
-from firebase_admin import credentials, messaging, exceptions
+try:
+    import firebase_admin
+    from firebase_admin import credentials, messaging, exceptions
+    FIREBASE_AVAILABLE = True
+except ImportError:
+    firebase_admin = None
+    credentials = None
+    messaging = None
+    exceptions = None
+    FIREBASE_AVAILABLE = False
+
 from .models import DeviceFCMToken, Conversation, Users, EndUser, SupplierExecutive, Supplier, Company
 
 # Initialize Firebase Admin once
@@ -10,7 +19,7 @@ KEY_PATHS = [
     os.path.join(os.path.dirname(os.path.dirname(__file__)), 'serviceAccountKey.json'),
 ]
 
-if not firebase_admin._apps:
+if FIREBASE_AVAILABLE and not firebase_admin._apps:
     for kp in KEY_PATHS:
         if os.path.exists(kp):
             try:
@@ -56,7 +65,7 @@ def get_recipient_tokens(user_id, user_type):
         return []
 
 def send_push(fcm_token, title, body, data=None):
-    if not fcm_token or str(fcm_token).strip() == '':
+    if not FIREBASE_AVAILABLE or not fcm_token or str(fcm_token).strip() == '':
         return None
     try:
         data_payload = {k: str(v) for k, v in (data or {}).items() if v is not None}
@@ -79,18 +88,18 @@ def send_push(fcm_token, title, body, data=None):
         res = messaging.send(message)
         _safe_log(f"[FCM] Successfully sent push to {str(fcm_token)[:20]}...: {title} -> {body[:30]}")
         return res
-    except exceptions.FirebaseError as fe:
-        err_msg = str(fe)
-        if 'not-registered' in err_msg.lower() or 'notregistered' in err_msg.lower():
-            _safe_log(f"[FCM] Token {str(fcm_token)[:20]}... expired/unregistered. Removing from DB.")
-            try:
-                DeviceFCMToken.objects.filter(fcm_token=str(fcm_token).strip()).delete()
-            except Exception:
-                pass
-        else:
-            _safe_log(f"[FCM] Firebase error sending push: {fe}")
-        return None
     except Exception as e:
+        if exceptions and isinstance(e, exceptions.FirebaseError):
+            err_msg = str(e)
+            if 'not-registered' in err_msg.lower() or 'notregistered' in err_msg.lower():
+                _safe_log(f"[FCM] Token {str(fcm_token)[:20]}... expired/unregistered. Removing from DB.")
+                try:
+                    DeviceFCMToken.objects.filter(fcm_token=str(fcm_token).strip()).delete()
+                except Exception:
+                    pass
+            else:
+                _safe_log(f"[FCM] Firebase error sending push: {e}")
+            return None
         _safe_log(f"[FCM] Error sending push: {e}")
         return None
 
