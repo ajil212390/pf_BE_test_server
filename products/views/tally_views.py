@@ -69,6 +69,7 @@ def tally_register_company_view(request):
     company_phone_raw = str(request.data.get('company_phone', '')).strip()
     company_address = str(request.data.get('company_address', '')).strip()
     company_location = str(request.data.get('company_location', '')).strip()
+    gstin = str(request.data.get('company_gstin', request.data.get('gstin', ''))).strip().upper()
     category_id = request.data.get('category_id')
     username = str(request.data.get('username', '')).strip()
     password = str(request.data.get('password', '')).strip()
@@ -95,7 +96,7 @@ def tally_register_company_view(request):
             company = Company.objects.create(
                 companyname=company_name,
                 companyphonenumber=phone_int,
-                companyaddress=company_address or 'Kerala, India',
+                companyaddress=(company_address + ' | GSTIN: ' + gstin if gstin else (company_address or 'Kerala, India')),
                 companylocation=company_location or 'Kerala, India',
                 categoryid=category,
                 coins_balance=0,
@@ -114,6 +115,7 @@ def tally_register_company_view(request):
             'company_id': company.companyid,
             'company_name': company.companyname,
             'company_phone': str(company.companyphonenumber),
+            'company_gstin': gstin,
             'username': user.username,
             'message': 'Company registered successfully'
         }, status=201)

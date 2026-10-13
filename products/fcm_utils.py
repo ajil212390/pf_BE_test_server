@@ -377,3 +377,91 @@ def notify_bill_sent(conversation, text_content=None):
     except Exception as e:
         _safe_log(f"[FCM] notify_bill_sent error: {e}")
 
+
+
+# 5. ORDER LOCKED NOTIFICATION
+def notify_order_locked(conversation, coins_locked):
+    try:
+        if not conversation or not conversation.company_id:
+            return
+        buyer_name = conversation.enduser.endusername if conversation.enduser else 'Customer'
+        title = buyer_name
+        body = f"Order Locked ({coins_locked} Tokens)\nCustomer confirmed pickup guarantee."
+        data = {
+            'type': 'order_locked',
+            'conversation_id': str(conversation.id),
+            'company_id': str(conversation.company_id),
+            'enduser_id': str(conversation.enduser_id or ''),
+            'sender_type': 'enduser',
+            'sender_name': buyer_name,
+            'title_name': buyer_name,
+            'coins_locked': str(coins_locked),
+        }
+        send_push_to_user(
+            user_id=conversation.company_id,
+            user_type='company',
+            title=title,
+            body=body,
+            data=data
+        )
+    except Exception as e:
+        _safe_log(f"[FCM] notify_order_locked error: {e}")
+
+# 6. ORDER PACKED NOTIFICATION
+def notify_order_packed(conversation):
+    try:
+        if not conversation or not conversation.enduser_id:
+            return
+        store_name = conversation.company.companyname if conversation.company else 'Store'
+        title = store_name
+        body = "Order Packed & Ready for Pickup\nPlease collect within 6 hours."
+        data = {
+            'type': 'order_packed',
+            'conversation_id': str(conversation.id),
+            'company_id': str(conversation.company_id or ''),
+            'enduser_id': str(conversation.enduser_id),
+            'sender_type': 'company',
+            'sender_name': store_name,
+            'title_name': store_name,
+        }
+        send_push_to_user(
+            user_id=conversation.enduser_id,
+            user_type='enduser',
+            title=title,
+            body=body,
+            data=data
+        )
+    except Exception as e:
+        _safe_log(f"[FCM] notify_order_packed error: {e}")
+
+# 7. ORDER PICKED UP NOTIFICATION
+def notify_order_picked_up(conversation, coins_refunded=0):
+    try:
+        if not conversation or not conversation.enduser_id:
+            return
+        store_name = conversation.company.companyname if conversation.company else 'Store'
+        title = store_name
+        if coins_refunded and int(coins_refunded) > 0:
+            body = f"Order Picked Up Successfully\n{coins_refunded} Tokens refunded to your wallet."
+        else:
+            body = "Order Picked Up Successfully\nThank you for shopping!"
+        data = {
+            'type': 'order_picked_up',
+            'conversation_id': str(conversation.id),
+            'company_id': str(conversation.company_id or ''),
+            'enduser_id': str(conversation.enduser_id),
+            'sender_type': 'company',
+            'sender_name': store_name,
+            'title_name': store_name,
+            'coins_refunded': str(coins_refunded),
+        }
+        send_push_to_user(
+            user_id=conversation.enduser_id,
+            user_type='enduser',
+            title=title,
+            body=body,
+            data=data
+        )
+    except Exception as e:
+        _safe_log(f"[FCM] notify_order_picked_up error: {e}")
+

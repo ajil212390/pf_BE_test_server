@@ -100,6 +100,14 @@ def get_company_conversations(request, company_id):
             last_message = conv.messages.order_by('-timestamp').first()
             unread_count = conv.messages.filter(sender_type='enduser', is_read=False).count()
             enduser_ph = str(getattr(conv.enduser, 'enduserphone', '') or "").strip()
+            total_messages = conv.messages.count()
+            has_company_replied = conv.messages.filter(sender_type='company').exists()
+            has_completed_orders = conv.messages.filter(order_status__in=['delivered', 'confirmed', 'packed', 'accepted']).exists()
+            order_count = conv.messages.filter(text_content__icontains='New Order').count()
+            is_established = has_company_replied or has_completed_orders or (total_messages > 1) or (order_count > 1)
+            is_accepted = is_established
+            is_first_order = not is_established
+
             result.append({
                 'conversation_id': conv.id,
                 'enduser_id': conv.enduser.endsuerid,
@@ -114,6 +122,15 @@ def get_company_conversations(request, company_id):
                 'unread_count': unread_count,
                 'has_audio': bool(last_message.audio_file) if last_message else False,
                 'conversation_type': 'customer',
+                'total_messages': total_messages,
+                'message_count': total_messages,
+                'messages_count': total_messages,
+                'has_company_replied': has_company_replied,
+                'is_established': is_established,
+                'is_accepted': is_accepted,
+                'is_first_order': is_first_order,
+                'is_new_customer': not is_established,
+                'order_count': order_count,
             })
         return Response(result)
     except Exception as e:
@@ -1501,6 +1518,12 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
                 if comp_obj:
                     company_balance = comp_obj.coins_balance or 0
 
+        try:
+            from ..fcm_utils import notify_order_locked
+            notify_order_locked(conv, required_coins)
+        except Exception as _fcm_err:
+            print(f"[FCM] Error notifying order locked: {_fcm_err}")
+
         return Response({
             "success": True,
             "message_id": msg.id,
@@ -1570,6 +1593,12 @@ def complete_order_delivery(request, message_id=None, conversation_id=None):
                     )
                 except Exception:
                     pass
+
+        try:
+            from ..fcm_utils import notify_order_picked_up
+            notify_order_picked_up(conv, coins_to_refund)
+        except Exception as _fcm_err:
+            print(f"[FCM] Error notifying order picked up: {_fcm_err}")
 
         return Response({
             "success": True,
@@ -1689,6 +1718,12 @@ def company_pack_order(request, message_id=None, conversation_id=None):
         else:
             msg.expires_at = None
         msg.save(update_fields=["order_status", "is_pack_confirmed", "pack_confirmed_at", "expires_at"])
+
+        try:
+            from ..fcm_utils import notify_order_packed
+            notify_order_packed(conv)
+        except Exception as _fcm_err:
+            print(f"[FCM] Error notifying order packed: {_fcm_err}")
 
         return Response({
             "success": True,
