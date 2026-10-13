@@ -139,11 +139,15 @@ elif IS_PRODUCTION:
 
 if IS_PRODUCTION:
     CORS_ALLOW_ALL_ORIGINS = False
-    CORS_ALLOWED_ORIGINS = [
-        origin.strip()
-        for origin in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
-        if origin.strip()
-    ]
+    _origins = []
+    for origin in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(','):
+        o = origin.strip()
+        if o:
+            if not o.startswith('http://') and not o.startswith('https://'):
+                _origins.append(f'http://{o}')
+            else:
+                _origins.append(o)
+    CORS_ALLOWED_ORIGINS = _origins
 else:
     CORS_ALLOW_ALL_ORIGINS = True
 
