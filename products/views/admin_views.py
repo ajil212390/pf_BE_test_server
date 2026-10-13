@@ -343,7 +343,18 @@ def admin_user_customer_supplier_overview(request, user_id):
 
             p_tot = sum(p['amount'] for p in matched_payments)
             amt = float(bill.customerbillamount or 0)
-            bal = max(0.0, amt - p_tot)
+            # Support payments tracked directly on the bill (e.g., Tally sync)
+            if p_tot == 0.0 and getattr(bill, 'paidamount', None) is not None and float(bill.paidamount or 0) > 0:
+                p_tot = float(bill.paidamount or 0)
+                matched_payments = [{
+                    'payment_id': f"RCPT-{bill.customerbillno}",
+                    'bill_no': bill.customerbillno or '',
+                    'date': str(bill.customerbilldate) if bill.customerbilldate else '',
+                    'amount': p_tot,
+                    'type': 'Receipt',
+                    'narration': bill.narration or f'Receipt against {bill.customerbillno}',
+                }]
+            bal = float(bill.balance) if getattr(bill, 'balance', None) is not None else max(0.0, amt - p_tot)
 
             customer_bill_items.append({
                 'id': bill.customerbillid,
@@ -394,6 +405,25 @@ def admin_user_customer_supplier_overview(request, user_id):
             'type': bill.customerbilltype or 'Receipt',
             'status': 'Paid',
         })
+    if not customer_payment_items:
+        for b in customer_regular_bills:
+            p_val = float(getattr(b, 'paidamount', 0) or 0)
+            if p_val > 0:
+                customer_payment_items.append({
+                    'id': b.customerbillid,
+                    'customer_id': b.customerid_id,
+                    'customer_name': b.customerid.customername if getattr(b, 'customerid', None) else '',
+                    'bill_no': f"RCPT-{b.customerbillno}",
+                    'reference': b.customerbillno or '',
+                    'date': str(b.customerbilldate) if b.customerbilldate else '',
+                    'due_date': str(b.customerbillduedate) if b.customerbillduedate else '',
+                    'amount': p_val,
+                    'paid_amount': p_val,
+                    'balance': 0.0,
+                    'narration': b.narration or f'Receipt against {b.customerbillno}',
+                    'type': 'Receipt',
+                    'status': 'Paid',
+                })
 
     # 6. Build supplier bill items with linked payments
     supplier_bill_items = []
@@ -415,7 +445,18 @@ def admin_user_customer_supplier_overview(request, user_id):
 
             p_tot = sum(p['amount'] for p in matched_payments)
             amt = float(bill.supplierbillamount or 0)
-            bal = max(0.0, amt - p_tot)
+            # Support payments tracked directly on the bill (e.g., Tally sync)
+            if p_tot == 0.0 and getattr(bill, 'paidamount', None) is not None and float(bill.paidamount or 0) > 0:
+                p_tot = float(bill.paidamount or 0)
+                matched_payments = [{
+                    'payment_id': f"PAY-{bill.supplierbillno}",
+                    'bill_no': bill.supplierbillno or '',
+                    'date': str(bill.supplierbilldate) if bill.supplierbilldate else '',
+                    'amount': p_tot,
+                    'type': 'Payment',
+                    'narration': bill.narration or f'Payment against {bill.supplierbillno}',
+                }]
+            bal = float(bill.balance) if getattr(bill, 'balance', None) is not None else max(0.0, amt - p_tot)
 
             supplier_bill_items.append({
                 'id': bill.supplierbillid,
@@ -466,6 +507,25 @@ def admin_user_customer_supplier_overview(request, user_id):
             'type': bill.supplierbilltype or 'Payment',
             'status': 'Paid',
         })
+    if not supplier_payment_items:
+        for b in supplier_regular_bills:
+            p_val = float(getattr(b, 'paidamount', 0) or 0)
+            if p_val > 0:
+                supplier_payment_items.append({
+                    'id': b.supplierbillid,
+                    'supplier_id': b.supplierid_id,
+                    'supplier_name': b.supplierid.suppliername if getattr(b, 'supplierid', None) else '',
+                    'bill_no': f"PAY-{b.supplierbillno}",
+                    'reference': b.supplierbillno or '',
+                    'date': str(b.supplierbilldate) if b.supplierbilldate else '',
+                    'due_date': str(b.supplierbillduedate) if b.supplierbillduedate else '',
+                    'amount': p_val,
+                    'paid_amount': p_val,
+                    'balance': 0.0,
+                    'narration': b.narration or f'Payment against {b.supplierbillno}',
+                    'type': 'Payment',
+                    'status': 'Paid',
+                })
 
     # 9. Customer list with individual financial totals
     customer_list = []
@@ -477,8 +537,10 @@ def admin_user_customer_supplier_overview(request, user_id):
 
         c_sales_amt = sum(float(b.customerbillamount or 0) for b in c_sales)
         c_notes_amt = sum(float(b.customerbillamount or 0) for b in c_notes)
-        c_paid_amt = sum(float(b.customerbillamount or 0) for b in c_pays)
-        c_outstanding = (c_sales_amt - c_notes_amt) - c_paid_amt
+        c_pays_amt = sum(float(b.customerbillamount or 0) for b in c_pays)
+        c_direct_paid = sum(float(b.paidamount or 0) for b in c_sales)
+        c_paid_amt = max(c_pays_amt, c_direct_paid)
+        c_outstanding = max(0.0, (c_sales_amt - c_notes_amt) - c_paid_amt)
 
         customer_list.append({
             'id': customer.customerid,
@@ -515,8 +577,10 @@ def admin_user_customer_supplier_overview(request, user_id):
 
         s_purchases_amt = sum(float(b.supplierbillamount or 0) for b in s_purchases)
         s_notes_amt = sum(float(b.supplierbillamount or 0) for b in s_notes)
-        s_paid_amt = sum(float(b.supplierbillamount or 0) for b in s_pays)
-        s_outstanding = (s_purchases_amt - s_notes_amt) - s_paid_amt
+        s_pays_amt = sum(float(b.supplierbillamount or 0) for b in s_pays)
+        s_direct_paid = sum(float(b.paidamount or 0) for b in s_purchases)
+        s_paid_amt = max(s_pays_amt, s_direct_paid)
+        s_outstanding = max(0.0, (s_purchases_amt - s_notes_amt) - s_paid_amt)
 
         supplier_list.append({
             'id': supplier.supplierid,

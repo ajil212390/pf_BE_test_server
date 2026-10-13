@@ -17,6 +17,13 @@ import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.utils import get_random_secret_key
 
+# Load .env file automatically if it exists (for local dev and VPS)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed — rely on OS environment vars
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -175,7 +182,8 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 MEDIA_URL = '/media/'
-if os.path.exists(r'D:\Products'):
+# On Windows dev machine, optionally use D:\Products if it exists
+if os.name == 'nt' and os.path.exists(r'D:\Products'):
     MEDIA_ROOT = r'D:\Products'
 else:
     MEDIA_ROOT = os.path.join(BASE_DIR, 'media')

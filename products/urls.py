@@ -1,3 +1,4 @@
+from .views.tally_views import tally_test_connection_view, tally_sync_bills_view, tally_categories_view, tally_register_company_view, tally_login_company_view
 from .views.due_date_extension_views import request_extension_otp_view, verify_and_extend_view
 from .views.supplier_views import bill_commitments_view
 from django.urls import path, include
@@ -134,4 +135,11 @@ urlpatterns = [
     path('commitments/verify-and-extend/', verify_and_extend_view, name='verify_and_extend'),
     path('supplier/bills/request-extension-otp/', request_extension_otp_view),
     path('supplier/bills/verify-and-extend/', verify_and_extend_view),
+
+    # Tally ERP Sync Integration Endpoints
+    path('tally/test-connection/', tally_test_connection_view, name='tally_test_connection'),
+    path('tally/sync/', tally_sync_bills_view, name='tally_sync_bills'),
+    path('tally/categories/', tally_categories_view, name='tally_categories'),
+    path('tally/register-company/', tally_register_company_view, name='tally_register_company'),
+    path('tally/login-company/', tally_login_company_view, name='tally_login_company'),
 ]

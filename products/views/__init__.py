@@ -129,3 +129,8 @@ __all__ = [
 
 
 from .due_date_extension_views import request_extension_otp_view, verify_and_extend_view
+
+from .tally_views import (
+    tally_test_connection_view,
+    tally_sync_bills_view,
+)

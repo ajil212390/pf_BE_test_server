@@ -356,6 +356,54 @@ def get_conversation_messages(request, conversation_id):
                 is_read=False
             ).update(is_read=True)
 
+        # Auto-forfeit packed orders where the 6-hour pickup window has expired
+        from django.utils import timezone
+        now_time = timezone.now()
+        expired_packed = ChatMessage.objects.filter(
+            conversation_id=conversation_id,
+            order_status="packed",
+            expires_at__isnull=False,
+            expires_at__lte=now_time,
+            is_coins_refunded=False
+        )
+        for exp_msg in expired_packed:
+            try:
+                with transaction.atomic():
+                    exp_msg = ChatMessage.objects.select_for_update().filter(id=exp_msg.id).first()
+                    if exp_msg and exp_msg.order_status == "packed":
+                        forfeit_amt = getattr(exp_msg, "commitment_coins_locked", 0) or 0
+                        if forfeit_amt > 0:
+                            conv_obj = exp_msg.conversation
+                            if conv_obj and conv_obj.company:
+                                comp = Company.objects.select_for_update().filter(companyid=conv_obj.company.companyid).first()
+                                if comp:
+                                    comp.coins_balance = (comp.coins_balance or 0) + forfeit_amt
+                                    comp.save(update_fields=["coins_balance"])
+                        exp_msg.order_status = "forfeited"
+                        exp_msg.save(update_fields=["order_status"])
+            except Exception:
+                pass
+
+        # 24-Hour complete self-destruction for ALL customer chat messages (including order receipts, text, audio, images)
+        import datetime
+        conv_rec = Conversation.objects.filter(id=conversation_id).first()
+        if conv_rec and (conv_rec.conversation_type == 'customer' or conv_rec.enduser_id is not None):
+            cutoff_24h = now_time - datetime.timedelta(hours=24)
+            # Delete ALL messages older than 24 hours
+            expired_24h_msgs = ChatMessage.objects.filter(
+                conversation_id=conversation_id,
+                timestamp__lt=cutoff_24h
+            )
+            for em in expired_24h_msgs:
+                try:
+                    if em.audio_file:
+                        em.audio_file.delete(save=False)
+                    if em.image_file:
+                        em.image_file.delete(save=False)
+                except Exception:
+                    pass
+            expired_24h_msgs.delete()
+
         messages = ChatMessage.objects.filter(conversation_id=conversation_id).order_by('timestamp')
         result = []
         for msg in messages:
@@ -451,6 +499,13 @@ def send_message(request):
 
         conversation.updated_at = msg.timestamp
         conversation.save()
+
+        # Set 24-hour self-destruction for ALL customer conversation messages (including order receipts, text, audio, images)
+        if conversation.conversation_type == 'customer' or conversation.enduser_id is not None:
+            from django.utils import timezone
+            import datetime
+            msg.expires_at = timezone.now() + datetime.timedelta(hours=24)
+            msg.save(update_fields=['expires_at'])
 
         # If company sends bill with tokens waived (non-token normal order), mark immediately confirmed
         raw_text = (text_content or '').strip()
@@ -1436,16 +1491,15 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
                             pass
                     enduser_balance = enduser.coins_balance or 0
 
-            # Credit to company normal tokens (coins_balance)
+            # Do NOT credit company wallet on order placement.
+            # Tokens are locked as a pickup commitment deposit.
+            # Company only receives tokens if customer fails to pick up within the 6-hour timer.
             company_balance = 0
             company = conv.company
             if company:
-                company = Company.objects.select_for_update().filter(companyid=company.companyid).first()
-                if company:
-                    if required_coins > 0:
-                        company.coins_balance = (company.coins_balance or 0) + required_coins
-                        company.save(update_fields=["coins_balance"])
-                    company_balance = company.coins_balance or 0
+                comp_obj = Company.objects.filter(companyid=company.companyid).first()
+                if comp_obj:
+                    company_balance = comp_obj.coins_balance or 0
 
         return Response({
             "success": True,
@@ -1481,23 +1535,49 @@ def complete_order_delivery(request, message_id=None, conversation_id=None):
         if not _can_access_conversation(request, conv):
             return Response({"error": "Not authorized"}, status=status.HTTP_403_FORBIDDEN)
 
-        msg.order_status = "delivered"
-        msg.is_coins_refunded = True
-        msg.save(update_fields=["order_status", "is_coins_refunded"])
+        with transaction.atomic():
+            coins_to_refund = getattr(msg, "commitment_coins_locked", 0) or 0
+            enduser_balance = 0
 
-        if conv.enduser:
-            try:
-                EndUser.objects.filter(endsuerid=conv.enduser.endsuerid).update(
-                    completed_orders_count=models.F("completed_orders_count") + 1
-                )
-            except Exception:
-                pass
+            # 100% refund commitment deposit directly back to customer upon successful pickup
+            if coins_to_refund > 0 and not getattr(msg, "is_coins_refunded", False):
+                if conv.enduser:
+                    enduser = EndUser.objects.select_for_update().filter(endsuerid=conv.enduser.endsuerid).first()
+                    if enduser:
+                        enduser.coins_balance = (enduser.coins_balance or 0) + coins_to_refund
+                        enduser.save(update_fields=["coins_balance"])
+                        enduser_balance = enduser.coins_balance
+                        try:
+                            from products.models import CoinTransaction
+                            CoinTransaction.objects.create(
+                                end_user=enduser,
+                                amount=coins_to_refund,
+                                transaction_type="refund",
+                                reference_order_id=msg.id,
+                                note=f"Pickup completed: Locked deposit refunded for Order #{msg.id}",
+                            )
+                        except Exception:
+                            pass
+
+            msg.order_status = "delivered"
+            msg.is_coins_refunded = True
+            msg.save(update_fields=["order_status", "is_coins_refunded"])
+
+            if conv.enduser:
+                try:
+                    EndUser.objects.filter(endsuerid=conv.enduser.endsuerid).update(
+                        completed_orders_count=models.F("completed_orders_count") + 1
+                    )
+                except Exception:
+                    pass
 
         return Response({
             "success": True,
             "message_id": msg.id,
             "conversation_id": conv.id,
             "order_status": "delivered",
+            "coins_refunded": coins_to_refund,
+            "enduser_coins_balance": enduser_balance,
         })
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1533,10 +1613,30 @@ def forfeit_order_coins(request, message_id=None, order_id=None):
         target_id = message_id or order_id or request.data.get("message_id")
         msg = ChatMessage.objects.filter(id=target_id).first()
         if msg:
-            msg.order_status = "forfeited"
-            coins = getattr(msg, "commitment_coins_locked", 0) or 0
-            msg.save(update_fields=["order_status"])
-            return Response({"success": True, "forfeited_coins": coins})
+            with transaction.atomic():
+                msg = ChatMessage.objects.select_for_update().filter(id=msg.id).first()
+                forfeit_coins = getattr(msg, "commitment_coins_locked", 0) or 0
+                company_balance = 0
+
+                # Customer failed to pick up: credit deposit to Company wallet as compensation
+                if forfeit_coins > 0 and msg.order_status != "delivered" and not getattr(msg, "is_coins_refunded", False) and msg.order_status != "forfeited":
+                    conv = msg.conversation
+                    if conv and conv.company:
+                        comp = Company.objects.select_for_update().filter(companyid=conv.company.companyid).first()
+                        if comp:
+                            comp.coins_balance = (comp.coins_balance or 0) + forfeit_coins
+                            comp.save(update_fields=["coins_balance"])
+                            company_balance = comp.coins_balance
+
+                msg.order_status = "forfeited"
+                msg.save(update_fields=["order_status"])
+                return Response({
+                    "success": True,
+                    "order_status": "forfeited",
+                    "forfeited_coins": forfeit_coins,
+                    "penalty_forfeited": forfeit_coins,
+                    "company_coins_balance": company_balance
+                })
 
         order = SupplierOrder.objects.filter(id=target_id).first()
         if order:
@@ -1733,9 +1833,10 @@ def get_company_transactions(request, company_id):
         data = []
         comp = Company.objects.filter(companyid=company_id).first()
 
-        # 1. Standard Token transactions (Order commitment tokens received)
+        # 1. Standard Token transactions (Claimed deposits from uncollected orders)
         order_msgs = ChatMessage.objects.filter(
             conversation__company_id=company_id,
+            order_status='forfeited',
             commitment_coins_locked__gt=0
         ).order_by('-id')[:100]
 
@@ -1746,10 +1847,10 @@ def get_company_transactions(request, company_id):
             if msg.conversation and msg.conversation.enduser:
                 cust_name = msg.conversation.enduser.endusername or ''
             data.append({
-                'id': f'ord_tx_{msg.id}',
+                'id': f'forfeit_tx_{msg.id}',
                 'amount': msg.commitment_coins_locked or 0,
-                'type': 'order_credit',
-                'reason': f'Commitment tokens received for Order #{msg.id}' + (f' ({cust_name})' if cust_name else ''),
+                'type': 'forfeit_claim',
+                'reason': f'Claimed deposit for uncollected Order #{msg.id}' + (f' ({cust_name})' if cust_name else ''),
                 'reference_id': f'ORD-{msg.id}',
                 'timestamp': msg.timestamp.isoformat() if msg.timestamp else None,
                 'token_type': 'standard',
