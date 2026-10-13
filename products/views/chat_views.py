@@ -1508,14 +1508,15 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
                             pass
                     enduser_balance = enduser.coins_balance or 0
 
-            # Do NOT credit company wallet on order placement.
-            # Tokens are locked as a pickup commitment deposit.
-            # Company only receives tokens if customer fails to pick up within the 6-hour timer.
+            # Direct deposit to Company wallet (e.g. Navas Bakes)
             company_balance = 0
             company = conv.company
             if company:
-                comp_obj = Company.objects.filter(companyid=company.companyid).first()
+                comp_obj = Company.objects.select_for_update().filter(companyid=company.companyid).first()
                 if comp_obj:
+                    if required_coins > 0:
+                        comp_obj.coins_balance = (comp_obj.coins_balance or 0) + required_coins
+                        comp_obj.save(update_fields=["coins_balance"])
                     company_balance = comp_obj.coins_balance or 0
 
         try:
@@ -1561,9 +1562,18 @@ def complete_order_delivery(request, message_id=None, conversation_id=None):
         with transaction.atomic():
             coins_to_refund = getattr(msg, "commitment_coins_locked", 0) or 0
             enduser_balance = 0
+            company_balance = 0
 
-            # 100% refund commitment deposit directly back to customer upon successful pickup
+            # 100% refund: Deduct tokens from Company wallet and return to Customer wallet
             if coins_to_refund > 0 and not getattr(msg, "is_coins_refunded", False):
+                company = conv.company
+                if company:
+                    comp_obj = Company.objects.select_for_update().filter(companyid=company.companyid).first()
+                    if comp_obj:
+                        comp_obj.coins_balance = max(0, (comp_obj.coins_balance or 0) - coins_to_refund)
+                        comp_obj.save(update_fields=["coins_balance"])
+                        company_balance = comp_obj.coins_balance
+
                 if conv.enduser:
                     enduser = EndUser.objects.select_for_update().filter(endsuerid=conv.enduser.endsuerid).first()
                     if enduser:
@@ -1647,15 +1657,13 @@ def forfeit_order_coins(request, message_id=None, order_id=None):
                 forfeit_coins = getattr(msg, "commitment_coins_locked", 0) or 0
                 company_balance = 0
 
-                # Customer failed to pick up: credit deposit to Company wallet as compensation
-                if forfeit_coins > 0 and msg.order_status != "delivered" and not getattr(msg, "is_coins_refunded", False) and msg.order_status != "forfeited":
-                    conv = msg.conversation
-                    if conv and conv.company:
-                        comp = Company.objects.select_for_update().filter(companyid=conv.company.companyid).first()
-                        if comp:
-                            comp.coins_balance = (comp.coins_balance or 0) + forfeit_coins
-                            comp.save(update_fields=["coins_balance"])
-                            company_balance = comp.coins_balance
+                # Company already received tokens upon order confirmation.
+                # Mark as forfeited so no future refund is permitted; tokens remain permanently with company.
+                conv = msg.conversation
+                if conv and conv.company:
+                    comp = Company.objects.filter(companyid=conv.company.companyid).first()
+                    if comp:
+                        company_balance = comp.coins_balance or 0
 
                 msg.order_status = "forfeited"
                 msg.save(update_fields=["order_status"])
