@@ -1,10 +1,11 @@
 from decimal import Decimal
 
-from rest_framework import status
+from rest_framework import status, serializers
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from django.db.models import Sum, Q
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiResponse, OpenApiTypes, inline_serializer
 
 from ..models import Company, Users, Products, Customer, Supplier, CustomerBill, SupplierBill
 
@@ -130,6 +131,12 @@ def _allocate_payments_to_bills(regular_bills, payment_bills):
 
 # ─── Admin view functions ────────────────────────────────────────────────────
 
+@extend_schema(
+    summary="Admin Overview",
+    description="Returns high-level platform counts (companies, users, products, suppliers). Requires admin role token.",
+    responses={200: OpenApiResponse(description="Counts: total_companies, total_users, total_products, total_suppliers, total_connected_suppliers")},
+    tags=["Admin"]
+)
 @api_view(['GET'])
 @permission_classes([IsAdminRole])
 def admin_overview(request):
@@ -148,6 +155,12 @@ def admin_overview(request):
     })
 
 
+@extend_schema(
+    summary="Admin — List All Companies",
+    description="Returns all companies with user count, product count, and supplier count. Requires admin role token.",
+    responses={200: OpenApiResponse(description="List of companies with counts")},
+    tags=["Admin"]
+)
 @api_view(['GET'])
 @permission_classes([IsAdminRole])
 def admin_companies(request):
@@ -171,6 +184,12 @@ def admin_companies(request):
     return Response(result)
 
 
+@extend_schema(
+    summary="Admin — List All Users",
+    description="Returns all users (excluding built-in admin) with their company and product count. Requires admin role token.",
+    responses={200: OpenApiResponse(description="List of users with userid, username, useremail, companyname, product_count")},
+    tags=["Admin"]
+)
 @api_view(['GET'])
 @permission_classes([IsAdminRole])
 def admin_users(request):
@@ -193,6 +212,12 @@ def admin_users(request):
     return Response(result)
 
 
+@extend_schema(
+    summary="Admin — List All Products",
+    description="Returns all products across all companies with uploader info. Requires admin role token.",
+    responses={200: OpenApiResponse(description="List of products with productid, productname, productprice, category, unit, company")},
+    tags=["Admin"]
+)
 @api_view(['GET'])
 @permission_classes([IsAdminRole])
 def admin_products(request):
@@ -221,6 +246,18 @@ def admin_products(request):
     return Response(result)
 
 
+@extend_schema(
+    summary="Admin — Products for a Specific User",
+    description="Returns all products uploaded by a specific user (or their company). Requires admin or the same company user.",
+    parameters=[
+        OpenApiParameter(name="user_id", location=OpenApiParameter.PATH, description="User ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={
+        200: OpenApiResponse(description="User details and product list"),
+        404: OpenApiResponse(description="User not found"),
+    },
+    tags=["Admin"]
+)
 @api_view(['GET'])
 @permission_classes([IsAdminOrOwnCompanyUser])
 def admin_user_products(request, user_id):
@@ -269,6 +306,18 @@ def admin_user_products(request, user_id):
     })
 
 
+@extend_schema(
+    summary="Admin — Customer & Supplier Overview for User",
+    description="Returns full customer and supplier financial overview for the company linked to a user. Includes bills, notes, payments lists.",
+    parameters=[
+        OpenApiParameter(name="user_id", location=OpenApiParameter.PATH, description="User ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={
+        200: OpenApiResponse(description="Customer and supplier financial summaries and detail lists"),
+        404: OpenApiResponse(description="User not found"),
+    },
+    tags=["Admin"]
+)
 @api_view(['GET'])
 @permission_classes([IsAdminOrOwnCompanyUser])
 def admin_user_customer_supplier_overview(request, user_id):
@@ -628,6 +677,18 @@ def admin_user_customer_supplier_overview(request, user_id):
 
 
 
+@extend_schema(
+    summary="Admin — Products for a Specific Company",
+    description="Returns all products for a specific company by company_id. Requires admin role token.",
+    parameters=[
+        OpenApiParameter(name="company_id", location=OpenApiParameter.PATH, description="Company ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={
+        200: OpenApiResponse(description="Company info and product list"),
+        404: OpenApiResponse(description="Company not found"),
+    },
+    tags=["Admin"]
+)
 @api_view(['GET'])
 @permission_classes([IsAdminRole])
 def admin_company_products(request, company_id):
@@ -663,6 +724,16 @@ def admin_company_products(request, company_id):
     })
 
 
+@extend_schema(
+    summary="Admin — List All Suppliers",
+    description="Returns all suppliers with financials. Supports optional query filters. Requires admin role token.",
+    parameters=[
+        OpenApiParameter(name="company_id", description="Filter by company ID", required=False, type=OpenApiTypes.INT),
+        OpenApiParameter(name="connected", description="Filter by connection status: 1=connected, 0=not connected", required=False, type=OpenApiTypes.STR),
+    ],
+    responses={200: OpenApiResponse(description="List of suppliers with bill count and financial info")},
+    tags=["Admin"]
+)
 @api_view(['GET'])
 @permission_classes([IsAdminRole])
 def admin_suppliers(request):
@@ -705,6 +776,18 @@ def admin_suppliers(request):
         })
     return Response(result)
 
+@extend_schema(
+    summary="EndUser — Store Bills Summary",
+    description="Returns all store bills for an enduser, matched by their phone number across all company customer records.",
+    parameters=[
+        OpenApiParameter(name="enduser_id", location=OpenApiParameter.PATH, description="EndUser ID", required=True, type=OpenApiTypes.INT),
+    ],
+    responses={
+        200: OpenApiResponse(description="List of store bill summaries grouped by company"),
+        404: OpenApiResponse(description="Enduser not found"),
+    },
+    tags=["EndUser"]
+)
 @api_view(['GET'])
 @permission_classes([IsAdminOrOwnEndUser])
 def get_enduser_store_bills_summary(request, enduser_id):

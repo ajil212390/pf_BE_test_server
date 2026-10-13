@@ -8,6 +8,8 @@ from django.contrib.auth.hashers import make_password, check_password
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework import serializers
+from drf_spectacular.utils import extend_schema, OpenApiResponse, OpenApiParameter, OpenApiTypes, inline_serializer
 from products.models import (
     Company, Users, Companycategory, Supplier, SupplierBill,
     Customer, CustomerBill, Products, Productcategory, Productunit, EndUser
@@ -26,12 +28,40 @@ def parse_tally_date(date_str):
             pass
     return None
 
+@extend_schema(
+    summary="List Company Categories",
+    description="Returns all company categories available for Tally registration. No authentication required.",
+    responses={200: OpenApiResponse(description="List of categories with categoryid and categoryname")},
+    tags=["Tally Sync"]
+)
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def tally_categories_view(request):
     cats = Companycategory.objects.all().values('categoryid', 'categoryname')
     return Response({'status': 'success', 'categories': list(cats)}, status=200)
 
+@extend_schema(
+    summary="Register Company (Tally)",
+    description="Registers a new company and user account from Tally ERP. No authentication required.",
+    request=inline_serializer(
+        name="TallyRegisterCompanyRequest",
+        fields={
+            "company_name": serializers.CharField(help_text="Company name (required)"),
+            "company_phone": serializers.CharField(help_text="Company phone number (required)"),
+            "username": serializers.CharField(help_text="Login username (required)"),
+            "password": serializers.CharField(help_text="Login password (required)"),
+            "company_address": serializers.CharField(required=False, help_text="Company address"),
+            "company_location": serializers.CharField(required=False, help_text="Company location"),
+            "category_id": serializers.IntegerField(required=False, help_text="Company category ID from /tally/categories/"),
+        }
+    ),
+    responses={
+        201: OpenApiResponse(description="Company registered successfully — returns company_id, username"),
+        400: OpenApiResponse(description="Missing required fields or username taken"),
+        500: OpenApiResponse(description="Internal server error"),
+    },
+    tags=["Tally Sync"]
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def tally_register_company_view(request):
@@ -92,6 +122,23 @@ def tally_register_company_view(request):
         logger.error(f"Error registering company: {e}")
         return Response({'status': 'error', 'message': str(e)}, status=500)
 
+@extend_schema(
+    summary="Login Company (Tally)",
+    description="Authenticates a company user from Tally ERP and returns company details. No authentication required.",
+    request=inline_serializer(
+        name="TallyLoginCompanyRequest",
+        fields={
+            "username": serializers.CharField(help_text="Login username"),
+            "password": serializers.CharField(help_text="Login password"),
+        }
+    ),
+    responses={
+        200: OpenApiResponse(description="Login successful — returns company_id, company_name, company_phone"),
+        400: OpenApiResponse(description="Missing fields or no company linked"),
+        401: OpenApiResponse(description="Invalid username or password"),
+    },
+    tags=["Tally Sync"]
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def tally_login_company_view(request):
@@ -118,6 +165,24 @@ def tally_login_company_view(request):
         'message': 'Logged in successfully'
     }, status=200)
 
+@extend_schema(
+    summary="Test Tally Connection",
+    description="Verifies that a Tally ERP client can reach this server and validates the company credentials.",
+    request=inline_serializer(
+        name="TallyTestConnectionRequest",
+        fields={
+            "company_id": serializers.IntegerField(help_text="Company ID to verify (required)"),
+            "company_phone": serializers.CharField(required=False, help_text="Optional phone to verify against DB"),
+        }
+    ),
+    responses={
+        200: OpenApiResponse(description="Connection successful"),
+        400: OpenApiResponse(description="company_id missing"),
+        401: OpenApiResponse(description="Phone verification failed"),
+        404: OpenApiResponse(description="Company not found"),
+    },
+    tags=["Tally Sync"]
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def tally_test_connection_view(request):
@@ -143,6 +208,46 @@ def tally_test_connection_view(request):
     except Exception as e:
         return Response({'status': 'error', 'message': str(e)}, status=500)
 
+@extend_schema(
+    summary="Sync Bills from Tally",
+    description=(
+        "Bulk-syncs supplier bills, customer bills, and products from Tally ERP.\n\n"
+        "- **bills**: List of supplier/purchase bill objects\n"
+        "- **customer_bills**: List of customer/sales bill objects\n"
+        "- **products**: List of stock item objects\n\n"
+        "Each bill object supports: party_name, bill_no, bill_date, due_date, "
+        "original_amount, pending_balance, party_gst, party_phone, party_address, bill_type, narration."
+    ),
+    request=inline_serializer(
+        name="TallySyncBillsRequest",
+        fields={
+            "company_id": serializers.IntegerField(help_text="Company ID (required)"),
+            "company_phone": serializers.CharField(required=False, help_text="Company phone for verification"),
+            "bills": serializers.ListField(
+                child=serializers.DictField(),
+                required=False,
+                help_text="List of supplier bill objects from Tally"
+            ),
+            "customer_bills": serializers.ListField(
+                child=serializers.DictField(),
+                required=False,
+                help_text="List of customer bill objects from Tally"
+            ),
+            "products": serializers.ListField(
+                child=serializers.DictField(),
+                required=False,
+                help_text="List of stock item/product objects from Tally"
+            ),
+        }
+    ),
+    responses={
+        200: OpenApiResponse(description="Sync result with counts of created/updated records"),
+        400: OpenApiResponse(description="company_id missing"),
+        401: OpenApiResponse(description="Phone verification failed"),
+        404: OpenApiResponse(description="Company not found"),
+    },
+    tags=["Tally Sync"]
+)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def tally_sync_bills_view(request):
