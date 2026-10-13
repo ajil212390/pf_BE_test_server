@@ -57,10 +57,13 @@ else:
     ALLOWED_HOSTS = ['*']
 USE_X_FORWARDED_HOST = True
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-SECURE_SSL_REDIRECT = IS_PRODUCTION
+# Set SECURE_SSL_REDIRECT=True in .env only AFTER you have SSL (HTTPS) configured.
+# Leaving it False on HTTP-only VPS prevents infinite redirect loops.
+SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'False').strip().lower() in {'1', 'true', 'yes'}
 SESSION_COOKIE_SECURE = IS_PRODUCTION
 CSRF_COOKIE_SECURE = IS_PRODUCTION
-SECURE_HSTS_SECONDS = 31536000 if IS_PRODUCTION else 0
+# HSTS only makes sense with SSL — disable until HTTPS is set up
+SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '0'))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = IS_PRODUCTION
 
 

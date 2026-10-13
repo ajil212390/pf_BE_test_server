@@ -21,6 +21,7 @@ db.sqlite3
 media/
 *.xlsx
 *.sql
+*.bak
 
 # Platform-specific deployment files (not used)
 render.yaml

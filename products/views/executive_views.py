@@ -413,6 +413,16 @@ def get_connected_companies_for_manager(request, manager_id):
             suppliers_q |= Q(supplierphonenumber=supplier_user.supplieruserphone)
         if supplier_user.supplierusergstnumber:
             suppliers_q |= Q(suppliergst=supplier_user.supplierusergstnumber)
+        if supplier_user.suppliername:
+            suppliers_q |= Q(suppliername__iexact=supplier_user.suppliername.strip())
+        if supplier_user.supplierid:
+            linked = supplier_user.supplierid
+            if linked.supplierphonenumber:
+                suppliers_q |= Q(supplierphonenumber=linked.supplierphonenumber)
+            if linked.suppliergst:
+                suppliers_q |= Q(suppliergst=linked.suppliergst)
+            if linked.suppliername:
+                suppliers_q |= Q(suppliername__iexact=linked.suppliername.strip())
 
         suppliers = Supplier.objects.select_related('companyid').filter(suppliers_q).distinct() if suppliers_q else Supplier.objects.none()
 

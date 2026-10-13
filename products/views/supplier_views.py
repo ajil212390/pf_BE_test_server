@@ -275,6 +275,16 @@ def supplier_bills(request, supplier_user_id):
             suppliers_q |= Q(supplierphonenumber=supplier_user.supplieruserphone)
         if supplier_user.supplierusergstnumber:
             suppliers_q |= Q(suppliergst=supplier_user.supplierusergstnumber)
+        if supplier_user.suppliername:
+            suppliers_q |= Q(suppliername__iexact=supplier_user.suppliername.strip())
+        if supplier_user.supplierid:
+            linked = supplier_user.supplierid
+            if linked.supplierphonenumber:
+                suppliers_q |= Q(supplierphonenumber=linked.supplierphonenumber)
+            if linked.suppliergst:
+                suppliers_q |= Q(suppliergst=linked.suppliergst)
+            if linked.suppliername:
+                suppliers_q |= Q(suppliername__iexact=linked.suppliername.strip())
     suppliers_q |= Q(supplierid=supplier_user_id)
 
     company_id_param = request.query_params.get('company_id') or request.query_params.get('companyid')
@@ -403,6 +413,16 @@ def supplier_dashboard(request, supplier_user_id):
         suppliers_q |= Q(supplierphonenumber=supplier_user.supplieruserphone)
     if supplier_user.supplierusergstnumber:
         suppliers_q |= Q(suppliergst=supplier_user.supplierusergstnumber)
+    if supplier_user.suppliername:
+        suppliers_q |= Q(suppliername__iexact=supplier_user.suppliername.strip())
+    if supplier_user.supplierid:
+        linked = supplier_user.supplierid
+        if linked.supplierphonenumber:
+            suppliers_q |= Q(supplierphonenumber=linked.supplierphonenumber)
+        if linked.suppliergst:
+            suppliers_q |= Q(suppliergst=linked.suppliergst)
+        if linked.suppliername:
+            suppliers_q |= Q(suppliername__iexact=linked.suppliername.strip())
 
     suppliers = Supplier.objects.select_related('companyid').filter(suppliers_q).distinct() if suppliers_q else Supplier.objects.none()
 
@@ -630,8 +650,16 @@ def _supplier_local_ids(supplier_user_id):
         match |= Q(supplierphonenumber=supplier_user.supplieruserphone)
     if supplier_user.supplierusergstnumber:
         match |= Q(suppliergst=supplier_user.supplierusergstnumber)
-    if not match and supplier_user.suppliername:
-        match = Q(suppliername__iexact=supplier_user.suppliername)
+    if supplier_user.suppliername:
+        match |= Q(suppliername__iexact=supplier_user.suppliername.strip())
+    if supplier_user.supplierid:
+        match |= Q(supplierid=supplier_user.supplierid_id)
+        if supplier_user.supplierid.supplierphonenumber:
+            match |= Q(supplierphonenumber=supplier_user.supplierid.supplierphonenumber)
+        if supplier_user.supplierid.suppliergst:
+            match |= Q(suppliergst=supplier_user.supplierid.suppliergst)
+        if supplier_user.supplierid.suppliername:
+            match |= Q(suppliername__iexact=supplier_user.supplierid.suppliername.strip())
     if not match:
         return []
     return list(Supplier.objects.filter(match).values_list('supplierid', flat=True))
