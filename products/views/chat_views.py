@@ -88,6 +88,25 @@ def get_company_conversations(request, company_id):
     """
     try:
         company_id = _resolve_company_id(company_id)
+        try:
+            cutoff_24h = timezone.now() - datetime.timedelta(hours=24)
+            expired_msgs = ChatMessage.objects.filter(
+                conversation__company_id=company_id,
+                conversation__conversation_type='customer',
+                timestamp__lt=cutoff_24h
+            )
+            for em in expired_msgs:
+                try:
+                    if em.audio_file:
+                        em.audio_file.delete(save=False)
+                    if em.image_file:
+                        em.image_file.delete(save=False)
+                except Exception:
+                    pass
+            expired_msgs.delete()
+        except Exception:
+            pass
+
         conversations = Conversation.objects.filter(
             company_id=company_id,
             enduser__isnull=False
@@ -266,6 +285,25 @@ def get_enduser_conversations(request, enduser_id):
     Returns store conversations for a retail customer (enduser).
     """
     try:
+        try:
+            cutoff_24h = timezone.now() - datetime.timedelta(hours=24)
+            expired_msgs = ChatMessage.objects.filter(
+                conversation__enduser_id=enduser_id,
+                conversation__conversation_type='customer',
+                timestamp__lt=cutoff_24h
+            )
+            for em in expired_msgs:
+                try:
+                    if em.audio_file:
+                        em.audio_file.delete(save=False)
+                    if em.image_file:
+                        em.image_file.delete(save=False)
+                except Exception:
+                    pass
+            expired_msgs.delete()
+        except Exception:
+            pass
+
         conversations = Conversation.objects.filter(
             enduser_id=enduser_id
         ).select_related('company').order_by('-updated_at')
@@ -801,6 +839,9 @@ def delete_message(request, message_id):
             return Response({'error': 'Supplier executives are not permitted to delete sent messages.'}, status=status.HTTP_403_FORBIDDEN)
         if msg.conversation and msg.conversation.executive_id and msg.sender_type == 'executive':
             return Response({'error': 'Supplier executives are not permitted to delete sent messages.'}, status=status.HTTP_403_FORBIDDEN)
+        text = msg.text_content or ""
+        if "New Order" in text or "Order Bill" in text or "ORDER BILL" in text or "Order Locked" in text:
+            return Response({'error': 'Orders and Bills cannot be deleted.'}, status=status.HTTP_400_BAD_REQUEST)
         msg.delete()
         return Response({'success': True, 'message': 'Message deleted completely.'})
     except ChatMessage.DoesNotExist:
@@ -946,6 +987,7 @@ def get_company_orders(request, company_id):
 
 
 @api_view(['POST'])
+@permission_classes([AllowAny])
 def update_fcm_token(request):
     """
     Endpoint to store or update the FCM device token for any user role.

@@ -129,7 +129,7 @@ def notify_chat_message(conversation, sender_type, text_content=None, has_audio=
         # Determine message body below title
         if has_audio:
             msg_type = 'voice'
-            body = 'ðŸŽ¤ Voice message'
+            body = 'Voice message'
         elif has_image:
             msg_type = 'image'
             body = 'Photo'
