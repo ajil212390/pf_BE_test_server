@@ -341,8 +341,8 @@ def admin_user_customer_supplier_overview(request, user_id):
     customers = Customer.objects.filter(companyid=company)
     suppliers = Supplier.objects.filter(companyid=company)
 
-    customer_bills = CustomerBill.objects.filter(customerid__companyid=company)
-    supplier_bills = SupplierBill.objects.filter(supplierid__companyid=company)
+    customer_bills = CustomerBill.objects.filter(customerid__companyid=company).order_by('-customerbilldate', '-customerbillid')
+    supplier_bills = SupplierBill.objects.filter(supplierid__companyid=company).order_by('-supplierbilldate', '-supplierbillid')
 
     # 1. Categorize customer bills
     customer_regular_bills = []
