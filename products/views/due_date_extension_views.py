@@ -327,15 +327,24 @@ def verify_and_extend_view(request):
 
     # Push Notification to Supplier
     try:
+        comp = Company.objects.filter(companyid=effective_company_id).first()
+        comp_name = comp.companyname if comp else 'Company'
+        notif_title = 'Bill Due Date Extended'
+        notif_body = f'{comp_name} extended Bill #{effective_bill_no} to {new_due_date_str} (+{extension_days} Days). +{recorded_cost} Premium Tokens credited to your wallet.'
+
         send_push_to_user(
             user_id=effective_supplier_id,
             user_type='supplier',
-            title='Token Credited for Extension',
-            body=f'+{recorded_cost} tokens received for Bill #{effective_bill_no} extension. Balance: {updated_supplier_balance}',
+            title=notif_title,
+            body=notif_body,
             data={
-                'type': 'supplier_token_credited',
+                'type': 'due_extension_supplier_credited',
                 'bill_no': str(effective_bill_no),
+                'bill_id': str(effective_bill_id),
+                'new_due_date': str(new_due_date_str),
+                'extension_days': str(extension_days),
                 'token_cost': str(recorded_cost),
+                'company_name': str(comp_name),
                 'supplier_tokens': str(updated_supplier_balance),
             }
         )

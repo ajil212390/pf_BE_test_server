@@ -1027,6 +1027,22 @@ def update_fcm_token(request):
                         user_type='company',
                         defaults={'fcm_token': token_str}
                     )
+        elif user_type == 'supplier':
+            from ..models import SupplierUser
+            su = SupplierUser.objects.filter(supplieruserid=uid).first()
+            if su and su.supplierid_id and su.supplierid_id != uid:
+                DeviceFCMToken.objects.update_or_create(
+                    user_id=su.supplierid_id,
+                    user_type='supplier',
+                    defaults={'fcm_token': token_str}
+                )
+            for s_item in SupplierUser.objects.filter(supplierid=uid):
+                if s_item.supplieruserid != uid:
+                    DeviceFCMToken.objects.update_or_create(
+                        user_id=s_item.supplieruserid,
+                        user_type='supplier',
+                        defaults={'fcm_token': token_str}
+                    )
 
         return Response({'success': True, 'message': f'FCM token registered for {user_type} #{user_id}'})
     except Exception as e:

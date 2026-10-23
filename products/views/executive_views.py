@@ -417,6 +417,30 @@ def place_executive_order(request):
                 price_at_order=item.get('price', 0)
             )
 
+        # Notify Company of Executive Field Order
+        try:
+            from ..fcm_utils import send_push_to_user
+            notif_title = f'Order Placed by {executive.executive_name}'
+            notif_body = f'Executive {executive.executive_name} placed Order #{order.order_id} ({len(items)} items). Tap to view.'
+            send_push_to_user(
+                user_id=company.companyid,
+                user_type='company',
+                title=notif_title,
+                body=notif_body,
+                data={
+                    'type': 'executive_order',
+                    'order_id': str(order.order_id),
+                    'company_id': str(company.companyid),
+                    'executive_id': str(executive.executiveid),
+                    'executive_name': str(executive.executive_name),
+                    'total_amount': str(order.total_amount),
+                    'supplier_id': str(supplier.supplierid if supplier else ''),
+                    'supplier_name': str(supplier.suppliername if supplier else ''),
+                }
+            )
+        except Exception as push_err:
+            print(f'[FCM] Error notifying company of executive order: {push_err}')
+
         return Response({
             'message': 'Order placed successfully',
             'order_id': order.order_id,

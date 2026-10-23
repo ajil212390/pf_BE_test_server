@@ -56,6 +56,16 @@ def get_recipient_tokens(user_id, user_type):
             if usr and usr.companyid_id:
                 u_ids.append(usr.companyid_id)
 
+        elif u_type == 'supplier':
+            target_types = ['supplier', 'user']
+            from .models import SupplierUser, Supplier
+            # If user_id is supplierid, also find supplieruser
+            sup_user_ids = list(SupplierUser.objects.filter(supplierid=int(user_id)).values_list('supplieruserid', flat=True))
+            u_ids.extend(sup_user_ids)
+            su = SupplierUser.objects.filter(supplieruserid=int(user_id)).first()
+            if su and su.supplierid_id:
+                u_ids.append(su.supplierid_id)
+
         tokens = list(DeviceFCMToken.objects.filter(
             user_id__in=list(set(u_ids)),
             user_type__in=target_types
@@ -83,7 +93,17 @@ def send_push(fcm_token, title, body, data=None):
                     sound='notification_sound',
                     channel_id='custom_sound_channel_v2',
                     click_action='FLUTTER_NOTIFICATION_CLICK',
+                    default_vibrate_timings=True,
                 ),
+            ),
+            apns=messaging.APNSConfig(
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        sound='notification_sound.mp3',
+                        badge=1,
+                        content_available=True,
+                    )
+                )
             ),
             token=str(fcm_token).strip(),
         )
@@ -345,7 +365,16 @@ def notify_bill_sent(conversation, text_content=None):
             return
         company_name = conversation.company.companyname if conversation.company else 'Store'
         title = company_name # COMPANY NAME ON TOP
-        body = "Order Invoice & Bill Ready\nTap to view details."
+        
+        # Clean amount without rupee symbol
+        raw_text = str(text_content or '')
+        import re
+        amt_match = re.search(r'([0-9]+(?:\.[0-9]+)?)', raw_text)
+        amt_str = amt_match.group(1) if amt_match else ''
+        if amt_str:
+            body = f"Order Accepted & Bill Sent: {amt_str} Tokens\nLock with tokens to confirm pickup."
+        else:
+            body = "Order Accepted & Bill Ready\nLock with tokens to confirm pickup."
 
         bill_data = {
             'type': 'bill',
