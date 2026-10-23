@@ -56,11 +56,11 @@ def request_extension_otp_view(request):
         supplier_id=effective_supplier_id
     ).count()
 
-    bill_amt = float(bill.supplierbillamount or 0)
+    bill_amt = float(bill.supplierbillamount or bill.balance or 0)
     fee_rate_percent = 10 + existing_commitments_count
     fee_rate = fee_rate_percent / 100.0
     calculated_cost = int(round(bill_amt * fee_rate))
-    final_token_cost = calculated_cost if calculated_cost > 0 else (token_cost if token_cost > 0 else 45)
+    final_token_cost = calculated_cost if calculated_cost > 0 else (token_cost if token_cost > 0 else int(round(bill_amt * 0.10)))
 
     otp_code = generate_4_digit_otp()
     now = timezone.now()

@@ -1381,23 +1381,68 @@ def deduct_company_wallet(request, company_id):
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
+def _resolve_supplier_all_ids(supplier_id, request=None):
+    from products.models import Supplieruser, Supplier
+    from .supplier_views import _supplier_local_ids
+
+    resolved_ids = set()
+    target_su_id = None
+    if request and getattr(request.user, 'role', None) == 'supplier' and getattr(request.user, 'supplier_user_id', None):
+        target_su_id = request.user.supplier_user_id
+    else:
+        try:
+            sid_int = int(supplier_id)
+            if Supplieruser.objects.filter(supplieruserid=sid_int).exists():
+                target_su_id = sid_int
+        except (ValueError, TypeError):
+            pass
+
+    if target_su_id:
+        resolved_ids.update(_supplier_local_ids(target_su_id))
+        su = Supplieruser.objects.filter(supplieruserid=target_su_id).first()
+        if su and su.supplierid_id:
+            resolved_ids.add(su.supplierid_id)
+
+    try:
+        resolved_ids.add(int(supplier_id))
+    except (ValueError, TypeError):
+        pass
+
+    return resolved_ids, target_su_id
+
+
 @api_view(['GET'])
 @authentication_classes([RoleTokenAuthentication])
 @permission_classes([IsAuthenticated])
 def get_supplier_wallet(request, supplier_id):
     """
     Returns supplier's Premium Token balance.
+    Checks Supplieruser and aggregates across all linked company Supplier ledger entities.
     """
     try:
-        supplier = Supplier.objects.filter(supplierid=supplier_id).first()
-        if not supplier:
-            su = Supplieruser.objects.filter(supplieruserid=supplier_id).first()
-            if su and su.supplierid:
-                supplier = Supplier.objects.filter(supplierid=su.supplierid).first()
-        balance = getattr(supplier, 'premium_tokens_balance', 0) if supplier else 0
+        from products.models import Supplieruser, Supplier
+        all_ids, target_su_id = _resolve_supplier_all_ids(supplier_id, request)
+
+        su_balance = 0
+        if target_su_id:
+            su = Supplieruser.objects.filter(supplieruserid=target_su_id).first()
+            if su:
+                su_balance = getattr(su, 'premium_tokens_balance', 0) or 0
+
+        ledger_balance = 0
+        if all_ids:
+            ledger_balance = sum(
+                Supplier.objects.filter(supplierid__in=all_ids)
+                .values_list('premium_tokens_balance', flat=True)
+            )
+
+        balance = max(su_balance, ledger_balance)
+        if balance == 0 and (su_balance + ledger_balance > 0):
+            balance = su_balance + ledger_balance
+
         return Response({
             'success': True,
-            'supplier_id': supplier_id,
+            'supplier_id': target_su_id or supplier_id,
             'coins_balance': balance,
             'premium_tokens_balance': balance,
             'premium_tokens': balance,
@@ -1414,23 +1459,38 @@ def recharge_supplier_wallet(request, supplier_id):
     Simulated recharge for suppliers.
     """
     try:
+        from products.models import Supplieruser, Supplier
         amount = int(request.data.get('amount') or 0)
         if amount <= 0:
             return Response({'error': 'Invalid recharge amount'}, status=status.HTTP_400_BAD_REQUEST)
-        supplier = Supplier.objects.filter(supplierid=supplier_id).first()
+
+        all_ids, target_su_id = _resolve_supplier_all_ids(supplier_id, request)
+        supplier = None
+        if all_ids:
+            supplier = Supplier.objects.filter(supplierid__in=all_ids).first()
         if not supplier:
-            su = Supplieruser.objects.filter(supplieruserid=supplier_id).first()
-            if su and su.supplierid:
-                supplier = Supplier.objects.filter(supplierid=su.supplierid).first()
-        if not supplier:
+            supplier = Supplier.objects.filter(supplierid=supplier_id).first()
+
+        new_bal = 0
+        if target_su_id:
+            su = Supplieruser.objects.filter(supplieruserid=target_su_id).first()
+            if su:
+                su.premium_tokens_balance = (getattr(su, 'premium_tokens_balance', 0) or 0) + amount
+                su.save(update_fields=['premium_tokens_balance'])
+                new_bal = su.premium_tokens_balance
+
+        if supplier:
+            curr = getattr(supplier, 'premium_tokens_balance', 0) or 0
+            supplier.premium_tokens_balance = curr + amount
+            supplier.save(update_fields=['premium_tokens_balance'])
+            new_bal = max(new_bal, supplier.premium_tokens_balance)
+        elif not target_su_id:
             return Response({'error': 'Supplier not found'}, status=status.HTTP_404_NOT_FOUND)
-        curr = getattr(supplier, 'premium_tokens_balance', 0) or 0
-        supplier.premium_tokens_balance = curr + amount
-        supplier.save(update_fields=['premium_tokens_balance'])
+
         return Response({
             'success': True,
-            'premium_tokens_balance': supplier.premium_tokens_balance,
-            'coins_balance': supplier.premium_tokens_balance,
+            'premium_tokens_balance': new_bal,
+            'coins_balance': new_bal,
             'added_amount': amount,
             'message': f'Successfully recharged {amount} Premium Tokens!'
         })
@@ -1440,6 +1500,7 @@ def recharge_supplier_wallet(request, supplier_id):
 @api_view(['POST'])
 def deduct_supplier_wallet(request, supplier_id):
     return _supplier_wallet_unavailable()
+
 
 
 @api_view(["GET"])
@@ -1827,16 +1888,18 @@ def get_supplier_premium_transactions(request, supplier_id):
     Returns the transaction history from premium_token_transaction for the supplier.
     """
     try:
-        from products.models import PremiumTokenTransaction, Company, Supplieruser
-        s_id = supplier_id
-        if not Supplier.objects.filter(supplierid=supplier_id).exists():
-            su = Supplieruser.objects.filter(supplieruserid=supplier_id).first()
-            if su and su.supplierid:
-                s_id = su.supplierid.supplierid if hasattr(su.supplierid, 'supplierid') else su.supplierid
+        from products.models import PremiumTokenTransaction, Company, Supplieruser, Supplier
+        all_ids, target_su_id = _resolve_supplier_all_ids(supplier_id, request)
 
-        txs = PremiumTokenTransaction.objects.filter(
-            Q(supplier_id=s_id) | Q(supplier_id=supplier_id) | Q(supplier_user_id=supplier_id)
-        ).distinct().order_by('-created_at')[:100]
+        q_filter = Q(supplier_id__in=all_ids)
+        if target_su_id:
+            q_filter |= Q(supplier_user_id=target_su_id)
+        try:
+            q_filter |= Q(supplier_id=int(supplier_id))
+        except (ValueError, TypeError):
+            pass
+
+        txs = PremiumTokenTransaction.objects.filter(q_filter).distinct().order_by('-created_at')[:100]
         data = []
         for tx in txs:
             is_credit = tx.transaction_type in ['due_date_extension', 'commitment_extension', 'recharge', 'credit']

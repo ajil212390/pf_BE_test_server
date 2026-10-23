@@ -618,22 +618,15 @@ def onboard_supplier(request):
 
 def _commitment_coin_cost(bill_amount, extension_count):
     """
-    Step 2.3: B2B Commitment Due Date Extension Formula
-    Rate Escalation:
-      - 1st extension (count=0): FREE upfront (0 tokens). 10% fee to supplier only if commitment broken.
-      - 2nd extension (count=1): 12% of bill amount
-      - 3rd extension (count=2): 13% of bill amount
-      - 4th+ extension (count>=3): escalates +1% per extension (14%, 15%, 16%...).
+    B2B Commitment Due Date Extension Formula:
+      - 1st extension (count=0): 10% of bill amount
+      - 2nd extension (count=1): 11% of bill amount
+      - 3rd extension (count=2): 12% of bill amount
+      - 4th+ extension (count>=3): escalates +1% per extension (13%, 14%, 15%...).
       - No maximum extension limit.
     """
-    if extension_count <= 0:
-        return 0
-    elif extension_count == 1:
-        rate = 0.12
-    elif extension_count == 2:
-        rate = 0.13
-    else:
-        rate = 0.13 + (extension_count - 2) * 0.01
+    count = max(0, int(extension_count or 0))
+    rate = (10 + count) / 100.0
 
     amt = float(bill_amount or 0)
     if amt <= 0:
@@ -748,10 +741,24 @@ def bill_commitments_view(request, bill_no=None):
 
                             # Step 2.4: Direct Token Transfer to Supplier
                             supplier = Supplier.objects.filter(supplierid=supplier_id).first()
+                            matched_su_id = None
                             if supplier:
                                 s_curr = getattr(supplier, 'premium_tokens_balance', 0) or 0
                                 supplier.premium_tokens_balance = s_curr + coin_cost
                                 supplier.save(update_fields=['premium_tokens_balance'])
+
+                                # Also credit the corresponding Supplieruser
+                                match_su = Q(supplierid=supplier_id)
+                                if supplier.supplierphonenumber:
+                                    match_su |= Q(supplieruserphone=supplier.supplierphonenumber)
+                                if supplier.suppliergst:
+                                    match_su |= Q(supplierusergstnumber=supplier.suppliergst)
+                                su_obj = Supplieruser.objects.filter(match_su).first()
+                                if su_obj:
+                                    matched_su_id = su_obj.supplieruserid
+                                    su_curr = getattr(su_obj, 'premium_tokens_balance', 0) or 0
+                                    su_obj.premium_tokens_balance = su_curr + coin_cost
+                                    su_obj.save(update_fields=['premium_tokens_balance'])
                     else:
                         if supplier_id not in _supplier_local_ids(request.user.supplier_user_id):
                             return Response({'error': 'Not authorized for this supplier bill.'}, status=status.HTTP_403_FORBIDDEN)
@@ -785,7 +792,7 @@ def bill_commitments_view(request, bill_no=None):
                         PremiumTokenTransaction.objects.create(
                             company_id=cid,
                             supplier_id=sid,
-                            supplier_user_id=getattr(request.user, 'supplier_user_id', None),
+                            supplier_user_id=matched_su_id or getattr(request.user, 'supplier_user_id', None),
                             bill_no=b_no,
                             bill_id=bid,
                             amount=int(coin_cost or 0),
