@@ -1416,36 +1416,44 @@ def _resolve_supplier_all_ids(supplier_id, request=None):
 @permission_classes([IsAuthenticated])
 def get_supplier_wallet(request, supplier_id):
     """
-    Returns supplier's Premium Token balance.
-    Checks Supplieruser and aggregates across all linked company Supplier ledger entities.
+    Returns supplier's Dual Wallet: Standard Tokens (Frontlly Coins) and Premium Tokens.
     """
     try:
         from products.models import Supplieruser, Supplier
         all_ids, target_su_id = _resolve_supplier_all_ids(supplier_id, request)
 
-        su_balance = 0
+        su = None
         if target_su_id:
             su = Supplieruser.objects.filter(supplieruserid=target_su_id).first()
-            if su:
-                su_balance = getattr(su, 'premium_tokens_balance', 0) or 0
 
-        ledger_balance = 0
+        # Standard Frontlly Tokens (coins_balance)
+        su_coins = getattr(su, 'coins_balance', 0) if su else 0
+        ledger_coins = 0
         if all_ids:
-            ledger_balance = sum(
+            ledger_coins = sum(
+                Supplier.objects.filter(supplierid__in=all_ids)
+                .values_list('coins_balance', flat=True)
+            )
+        coins_bal = max(su_coins, ledger_coins)
+
+        # Premium Tokens (premium_tokens_balance)
+        su_premium = getattr(su, 'premium_tokens_balance', 0) if su else 0
+        ledger_premium = 0
+        if all_ids:
+            ledger_premium = sum(
                 Supplier.objects.filter(supplierid__in=all_ids)
                 .values_list('premium_tokens_balance', flat=True)
             )
-
-        balance = max(su_balance, ledger_balance)
-        if balance == 0 and (su_balance + ledger_balance > 0):
-            balance = su_balance + ledger_balance
+        premium_bal = max(su_premium, ledger_premium)
 
         return Response({
             'success': True,
             'supplier_id': target_su_id or supplier_id,
-            'coins_balance': balance,
-            'premium_tokens_balance': balance,
-            'premium_tokens': balance,
+            'coins_balance': coins_bal,
+            'standard_tokens': coins_bal,
+            'standard_tokens_balance': coins_bal,
+            'premium_tokens': premium_bal,
+            'premium_tokens_balance': premium_bal,
         })
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -1456,7 +1464,63 @@ def get_supplier_wallet(request, supplier_id):
 @permission_classes([IsAuthenticated])
 def recharge_supplier_wallet(request, supplier_id):
     """
-    Simulated recharge for suppliers.
+    Simulated recharge for supplier Standard Frontlly Tokens (B2C / regular features).
+    """
+    try:
+        from products.models import Supplieruser, Supplier
+        amount = int(request.data.get('amount') or 0)
+        token_type = str(request.data.get('token_type') or 'standard').lower()
+        if amount <= 0:
+            return Response({'error': 'Invalid recharge amount'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if token_type == 'premium':
+            return recharge_supplier_premium_wallet(request, supplier_id)
+
+        all_ids, target_su_id = _resolve_supplier_all_ids(supplier_id, request)
+        supplier = None
+        if all_ids:
+            supplier = Supplier.objects.filter(supplierid__in=all_ids).first()
+        if not supplier:
+            supplier = Supplier.objects.filter(supplierid=supplier_id).first()
+
+        new_bal = 0
+        su = None
+        if target_su_id:
+            su = Supplieruser.objects.filter(supplieruserid=target_su_id).first()
+            if su:
+                su.coins_balance = (getattr(su, 'coins_balance', 0) or 0) + amount
+                su.save(update_fields=['coins_balance'])
+                new_bal = su.coins_balance
+
+        if supplier:
+            curr = getattr(supplier, 'coins_balance', 0) or 0
+            supplier.coins_balance = curr + amount
+            supplier.save(update_fields=['coins_balance'])
+            new_bal = max(new_bal, supplier.coins_balance)
+        elif not target_su_id:
+            return Response({'error': 'Supplier not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        prem_bal = getattr(su, 'premium_tokens_balance', 0) if su else (getattr(supplier, 'premium_tokens_balance', 0) if supplier else 0)
+
+        return Response({
+            'success': True,
+            'coins_balance': new_bal,
+            'standard_tokens_balance': new_bal,
+            'premium_tokens_balance': prem_bal,
+            'added_amount': amount,
+            'token_type': 'standard',
+            'message': f'Successfully recharged {amount} Frontlly Tokens!'
+        })
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@authentication_classes([RoleTokenAuthentication])
+@permission_classes([IsAuthenticated])
+def recharge_supplier_premium_wallet(request, supplier_id):
+    """
+    Simulated recharge for supplier Premium Tokens (B2B).
     """
     try:
         from products.models import Supplieruser, Supplier
@@ -1472,6 +1536,7 @@ def recharge_supplier_wallet(request, supplier_id):
             supplier = Supplier.objects.filter(supplierid=supplier_id).first()
 
         new_bal = 0
+        su = None
         if target_su_id:
             su = Supplieruser.objects.filter(supplieruserid=target_su_id).first()
             if su:
@@ -1487,11 +1552,16 @@ def recharge_supplier_wallet(request, supplier_id):
         elif not target_su_id:
             return Response({'error': 'Supplier not found'}, status=status.HTTP_404_NOT_FOUND)
 
+        std_bal = getattr(su, 'coins_balance', 0) if su else (getattr(supplier, 'coins_balance', 0) if supplier else 0)
+
         return Response({
             'success': True,
             'premium_tokens_balance': new_bal,
-            'coins_balance': new_bal,
+            'premium_tokens': new_bal,
+            'coins_balance': std_bal,
+            'standard_tokens_balance': std_bal,
             'added_amount': amount,
+            'token_type': 'premium',
             'message': f'Successfully recharged {amount} Premium Tokens!'
         })
     except Exception as e:

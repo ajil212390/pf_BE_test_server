@@ -72,7 +72,7 @@ from .chat_views import (
     confirm_order_bill,
     complete_order_delivery,
     toggle_trusted_customer,
-    get_company_wallet, recharge_company_wallet, recharge_company_premium_wallet, deduct_company_wallet, get_supplier_wallet, recharge_supplier_wallet, deduct_supplier_wallet, get_company_premium_transactions, get_supplier_premium_transactions, get_enduser_transactions, get_company_transactions,
+    get_company_wallet, recharge_company_wallet, recharge_company_premium_wallet, deduct_company_wallet, get_supplier_wallet, recharge_supplier_wallet, recharge_supplier_premium_wallet, deduct_supplier_wallet, get_company_premium_transactions, get_supplier_premium_transactions, get_enduser_transactions, get_company_transactions,
     recharge_enduser_wallet,
     forfeit_order_coins,
     company_pack_order,
