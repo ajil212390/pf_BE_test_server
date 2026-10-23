@@ -165,6 +165,8 @@ class Supplieruser(models.Model):
     supplieruseraddress = models.CharField(max_length=100, blank=True, null=True)
     supplieruserpassword = models.CharField(max_length=100, blank=True, null=True)
     location_coordinates = models.CharField(max_length=255, blank=True, null=True, db_column='location_coordinates')
+    coins_balance = models.IntegerField(default=1000, db_column='coins_balance')
+    premium_tokens_balance = models.IntegerField(default=0, db_column='premium_tokens_balance')
 
     class Meta:
         managed = False

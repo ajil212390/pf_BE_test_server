@@ -634,6 +634,8 @@ def admin_user_customer_supplier_overview(request, user_id):
         supplier_list.append({
             'id': supplier.supplierid,
             'name': supplier.suppliername,
+            'company_id': supplier.companyid_id,
+            'companyid': supplier.companyid_id,
             'gst_number': supplier.suppliergst or '',
             'phone': supplier.supplierphonenumber or '',
             'email': supplier.supplieremail or '',

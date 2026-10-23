@@ -685,16 +685,24 @@ def bill_commitments_view(request, bill_no=None):
         supplier_id = data.get('supplier_id')
         charge_company_wallet = data.get('charge_company_wallet') is True
 
-        if request.user.role == 'company':
-            if not company_id or int(company_id) != request.user.company_id:
+        user_role = getattr(request.user, 'role', None)
+        user_company_id = getattr(request.user, 'company_id', None)
+
+        if user_role == 'company':
+            if not company_id and user_company_id:
+                company_id = user_company_id
+            elif company_id and user_company_id and int(company_id) != user_company_id:
                 return Response({'error': 'Not authorized for this company.'}, status=status.HTTP_403_FORBIDDEN)
             charge_company_wallet = True
-        elif request.user.role == 'supplier':
+        elif user_role == 'supplier':
             if charge_company_wallet:
                 return Response({'error': 'Supplier commitments cannot charge a company wallet.'}, status=status.HTTP_403_FORBIDDEN)
+        elif user_role in ['executive', 'manager', 'admin']:
+            pass
         else:
             return Response({'error': 'Not authorized to create commitments.'}, status=status.HTTP_403_FORBIDDEN)
 
+        matched_su_id = None
         try:
             with transaction.atomic():
                 bill_query = SupplierBill.objects.select_related('supplierid')
@@ -706,10 +714,13 @@ def bill_commitments_view(request, bill_no=None):
 
                 if bill:
                     bill_id = bill.supplierbillid
-                    supplier_id = bill.supplierid_id
-                    bill_company_id = bill.supplierid.companyid_id
+                    if not supplier_id:
+                        supplier_id = bill.supplierid_id
+                    bill_company_id = bill.supplierid.companyid_id if bill.supplierid else None
                     if charge_company_wallet:
-                        if not company_id or int(company_id) != bill_company_id:
+                        if not company_id and bill_company_id:
+                            company_id = bill_company_id
+                        elif company_id and bill_company_id and int(company_id) != bill_company_id:
                             return Response({'error': 'The company does not own this bill.'}, status=status.HTTP_403_FORBIDDEN)
                         company = Company.objects.select_for_update().filter(companyid=bill_company_id).first()
                         if not company:
@@ -811,8 +822,9 @@ def bill_commitments_view(request, bill_no=None):
                 response_data['premium_tokens_balance'] = getattr(company, 'premium_tokens_balance', 0)
                 response_data['coins_deducted'] = coin_cost
             return Response(response_data, status=status.HTTP_201_CREATED)
-        except (TypeError, ValueError):
-            return Response({'error': 'Invalid company_id or bill_id.'}, status=status.HTTP_400_BAD_REQUEST)
+        except (TypeError, ValueError) as te:
+            logger.error(f'[bill_commitments_view error]: {te}', exc_info=True)
+            return Response({'error': f'Invalid parameter: {te}'}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
