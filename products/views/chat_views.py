@@ -1003,8 +1003,8 @@ def update_fcm_token(request):
         uid = int(user_id)
         token_str = str(fcm_token).strip()
 
-        # Remove token from other users so multi-account testing on the same device does not route wrong notifications
-        DeviceFCMToken.objects.filter(fcm_token=token_str).exclude(user_id=uid, user_type=user_type).delete()
+        # Update or add token for current user
+        # Note: Do not delete other accounts on the same device to prevent company tokens from being erased during testing
 
         DeviceFCMToken.objects.update_or_create(
             user_id=uid,

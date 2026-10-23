@@ -46,8 +46,10 @@ def get_recipient_tokens(user_id, user_type):
     try:
         u_type = str(user_type).lower().strip()
         u_ids = [int(user_id)]
+        target_types = [u_type]
 
         if u_type == 'company':
+            target_types = ['company', 'user']
             company_user_ids = list(Users.objects.filter(companyid=int(user_id)).values_list('userid', flat=True))
             u_ids.extend(company_user_ids)
             usr = Users.objects.filter(userid=int(user_id)).first()
@@ -56,7 +58,7 @@ def get_recipient_tokens(user_id, user_type):
 
         tokens = list(DeviceFCMToken.objects.filter(
             user_id__in=list(set(u_ids)),
-            user_type=u_type
+            user_type__in=target_types
         ).values_list('fcm_token', flat=True))
 
         return list(set(t.strip() for t in tokens if t and t.strip()))

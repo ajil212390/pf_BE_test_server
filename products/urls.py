@@ -1,5 +1,5 @@
 from .views.tally_views import tally_test_connection_view, tally_sync_bills_view, tally_categories_view, tally_register_company_view, tally_login_company_view
-from .views.due_date_extension_views import request_extension_otp_view, verify_and_extend_view
+from .views.due_date_extension_views import request_extension_otp_view, verify_and_extend_view, get_pending_extension_otp_view
 from .views.supplier_views import bill_commitments_view
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
@@ -133,6 +133,8 @@ urlpatterns = [
 
     # Phase 2 & 3: On-Field Bill Due Date Extension with OTP
     path('commitments/request-extension-otp/', request_extension_otp_view, name='request_extension_otp'),
+    path('commitments/pending-extension-otp/', get_pending_extension_otp_view, name='pending_extension_otp'),
+    path('supplier/bills/pending-extension-otp/', get_pending_extension_otp_view),
     path('commitments/verify-and-extend/', verify_and_extend_view, name='verify_and_extend'),
     path('supplier/bills/request-extension-otp/', request_extension_otp_view),
     path('supplier/bills/verify-and-extend/', verify_and_extend_view),

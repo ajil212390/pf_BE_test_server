@@ -9,7 +9,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 from ..fcm_utils import send_push_to_user, _safe_log
-from ..models import SupplierBill, Commitment, Company, Supplier
+from ..models import SupplierBill, Commitment, Company, Supplier, Users
 
 logger = logging.getLogger(__name__)
 
@@ -98,13 +98,23 @@ def request_extension_otp_view(request):
     }
 
     try:
-        send_push_to_user(
-            user_id=effective_company_id,
-            user_type='company',
-            title=notif_title,
-            body=notif_body,
-            data=notif_data
-        )
+        target_ids = {effective_company_id}
+        if company_id:
+            target_ids.add(company_id)
+        for u_id in Users.objects.filter(companyid=effective_company_id).values_list('userid', flat=True):
+            target_ids.add(u_id)
+        if company_id:
+            for u_id in Users.objects.filter(companyid=company_id).values_list('userid', flat=True):
+                target_ids.add(u_id)
+
+        for tid in target_ids:
+            send_push_to_user(
+                user_id=tid,
+                user_type='company',
+                title=notif_title,
+                body=notif_body,
+                data=notif_data
+            )
     except Exception as e:
         _safe_log(f'[FCM Extension OTP Error] {e}')
 
@@ -343,3 +353,63 @@ def verify_and_extend_view(request):
         'company_premium_tokens_balance': updated_company_balance,
         'supplier_premium_tokens_balance': updated_supplier_balance,
     }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_pending_extension_otp_view(request):
+    """
+    Returns active, unexpired, unused due date extension OTP for a given company.
+    Provides instant in-app display and polling fallback when FCM push is delayed or blocked.
+    """
+    try:
+        raw_cid = request.query_params.get('company_id') or request.query_params.get('user_id') or '0'
+        company_id = int(raw_cid)
+        if not company_id:
+            return Response({'has_pending': False, 'error': 'company_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        candidate_ids = [company_id]
+        usr = Users.objects.filter(userid=company_id).first()
+        if usr and usr.companyid_id:
+            candidate_ids.append(usr.companyid_id)
+        company_user_ids = list(Users.objects.filter(companyid=company_id).values_list('userid', flat=True))
+        candidate_ids.extend(company_user_ids)
+        candidate_ids = list(set(candidate_ids))
+
+        now = timezone.now()
+        placeholders = ', '.join(['%s'] * len(candidate_ids))
+        query = f"""
+            SELECT id, company_id, supplier_id, bill_id, bill_no, otp_code, new_due_date, extension_days, token_cost, expires_at, created_at
+            FROM due_date_extension_otp
+            WHERE company_id IN ({placeholders}) AND is_used = 0 AND expires_at > %s
+            ORDER BY id DESC LIMIT 1
+        """
+        params = candidate_ids + [now]
+
+        with connection.cursor() as cursor:
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            if not row:
+                return Response({'has_pending': False}, status=status.HTTP_200_OK)
+
+            otp_id, c_id, s_id, bill_id, bill_no, otp_code, new_due_date, extension_days, token_cost, expires_at, created_at = row
+            if timezone.is_naive(expires_at):
+                expires_at = timezone.make_aware(expires_at, timezone.get_current_timezone())
+            seconds_remaining = max(0, int((expires_at - now).total_seconds()))
+
+            return Response({
+                'has_pending': True,
+                'otp_id': otp_id,
+                'company_id': c_id,
+                'supplier_id': s_id,
+                'bill_id': bill_id,
+                'bill_no': bill_no,
+                'otp': otp_code,
+                'new_due_date': str(new_due_date),
+                'extension_days': extension_days,
+                'token_cost': token_cost or 0,
+                'expires_in': seconds_remaining,
+            }, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f'[Pending OTP Error] {e}', exc_info=True)
+        return Response({'has_pending': False, 'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

@@ -128,7 +128,7 @@ __all__ = [
 ]
 
 
-from .due_date_extension_views import request_extension_otp_view, verify_and_extend_view
+from .due_date_extension_views import request_extension_otp_view, verify_and_extend_view, get_pending_extension_otp_view
 
 from .tally_views import (
     tally_test_connection_view,
