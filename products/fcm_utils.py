@@ -58,11 +58,11 @@ def get_recipient_tokens(user_id, user_type):
 
         elif u_type == 'supplier':
             target_types = ['supplier', 'user']
-            from .models import SupplierUser, Supplier
+            from .models import Supplieruser, Supplier
             # If user_id is supplierid, also find supplieruser
-            sup_user_ids = list(SupplierUser.objects.filter(supplierid=int(user_id)).values_list('supplieruserid', flat=True))
+            sup_user_ids = list(Supplieruser.objects.filter(supplierid=int(user_id)).values_list('supplieruserid', flat=True))
             u_ids.extend(sup_user_ids)
-            su = SupplierUser.objects.filter(supplieruserid=int(user_id)).first()
+            su = Supplieruser.objects.filter(supplieruserid=int(user_id)).first()
             if su and su.supplierid_id:
                 u_ids.append(su.supplierid_id)
 
@@ -81,6 +81,8 @@ def send_push(fcm_token, title, body, data=None):
         return None
     try:
         data_payload = {k: str(v) for k, v in (data or {}).items() if v is not None}
+        data_payload.setdefault('title', str(title or ''))
+        data_payload.setdefault('body', str(body or ''))
         message = messaging.Message(
             notification=messaging.Notification(
                 title=title,
@@ -94,6 +96,8 @@ def send_push(fcm_token, title, body, data=None):
                     channel_id='custom_sound_channel_v2',
                     click_action='FLUTTER_NOTIFICATION_CLICK',
                     default_vibrate_timings=True,
+                    priority='high',
+                    visibility='public',
                 ),
             ),
             apns=messaging.APNSConfig(
@@ -219,6 +223,23 @@ def notify_chat_message(conversation, sender_type, text_content=None, has_audio=
             # Sender is executive -> Receiver is company
             sender_name = conversation.executive.executive_name if conversation.executive else 'Executive'
             title = sender_name # SENDER NAME ON TOP
+            base_data['sender_name'] = sender_name
+            base_data['title_name'] = sender_name
+
+            if conversation.company_id:
+                send_push_to_user(
+                    user_id=conversation.company_id,
+                    user_type='company',
+                    title=title,
+                    body=body,
+                    data=base_data
+                )
+        elif sender_type in ['supplier', 'manager']:
+            # Sender is supplier/manager -> Receiver is company
+            sender_name = 'Supplier'
+            if conversation.executive:
+                sender_name = conversation.executive.executive_name
+            title = sender_name
             base_data['sender_name'] = sender_name
             base_data['title_name'] = sender_name
 
@@ -359,13 +380,10 @@ def notify_order_status(conversation, status_val):
 
 # 4. BILL / INVOICE NOTIFICATION
 # Format: Title = Company Name (TOP), Body = Invoice Notice (BELOW)
-def notify_bill_sent(conversation, text_content=None):
+def notify_bill_sent(conversation, text_content=None, sender_type='company'):
     try:
         if not conversation:
             return
-        company_name = conversation.company.companyname if conversation.company else 'Store'
-        title = company_name # COMPANY NAME ON TOP
-        
         # Clean amount without rupee symbol
         raw_text = str(text_content or '')
         import re
@@ -376,35 +394,60 @@ def notify_bill_sent(conversation, text_content=None):
         else:
             body = "Order Accepted & Bill Ready\nLock with tokens to confirm pickup."
 
-        bill_data = {
-            'type': 'bill',
-            'is_bill': 'true',
-            'conversation_id': str(conversation.id),
-            'company_id': str(conversation.company_id or ''),
-            'enduser_id': str(conversation.enduser_id or '') if conversation.enduser_id else '',
-            'executive_id': str(conversation.executive_id or '') if conversation.executive_id else '',
-            'sender_type': 'company',
-            'sender_name': company_name,
-            'title_name': company_name,
-            'text_content': text_content or '',
-        }
-
-        if (conversation.conversation_type == 'executive' or conversation.executive_id) and conversation.executive_id:
-            send_push_to_user(
-                user_id=conversation.executive_id,
-                user_type='executive',
-                title=title,
-                body=body,
-                data=bill_data
-            )
-        elif conversation.enduser_id:
-            send_push_to_user(
-                user_id=conversation.enduser_id,
-                user_type='enduser',
-                title=title,
-                body=body,
-                data=bill_data
-            )
+        if sender_type == 'company':
+            company_name = conversation.company.companyname if conversation.company else 'Store'
+            title = company_name
+            bill_data = {
+                'type': 'bill',
+                'is_bill': 'true',
+                'conversation_id': str(conversation.id),
+                'company_id': str(conversation.company_id or ''),
+                'enduser_id': str(conversation.enduser_id or '') if conversation.enduser_id else '',
+                'executive_id': str(conversation.executive_id or '') if conversation.executive_id else '',
+                'sender_type': 'company',
+                'sender_name': company_name,
+                'title_name': company_name,
+                'text_content': text_content or '',
+            }
+            if conversation.executive_id:
+                send_push_to_user(
+                    user_id=conversation.executive_id,
+                    user_type='executive',
+                    title=title,
+                    body=body,
+                    data=bill_data
+                )
+            elif conversation.enduser_id:
+                send_push_to_user(
+                    user_id=conversation.enduser_id,
+                    user_type='enduser',
+                    title=title,
+                    body=body,
+                    data=bill_data
+                )
+        else:
+            sender_name = 'Supplier'
+            if conversation.executive:
+                sender_name = conversation.executive.executive_name
+            title = sender_name
+            bill_data = {
+                'type': 'bill',
+                'is_bill': 'true',
+                'conversation_id': str(conversation.id),
+                'company_id': str(conversation.company_id or ''),
+                'sender_type': str(sender_type),
+                'sender_name': sender_name,
+                'title_name': sender_name,
+                'text_content': text_content or '',
+            }
+            if conversation.company_id:
+                send_push_to_user(
+                    user_id=conversation.company_id,
+                    user_type='company',
+                    title=title,
+                    body=body,
+                    data=bill_data
+                )
     except Exception as e:
         _safe_log(f"[FCM] notify_bill_sent error: {e}")
 

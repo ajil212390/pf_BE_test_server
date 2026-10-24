@@ -395,21 +395,13 @@ def get_conversation_messages(request, conversation_id):
     """
     try:
         sender_type = (request.GET.get('sender_type') or '').strip().lower()
-        if sender_type in ['supplier', 'manager'] or request.GET.get('is_supervisor') == 'true':
+        # Mark incoming messages as read: ONLY mark messages from OTHER parties, NEVER the viewer's own messages!
+        mark_read = request.GET.get('mark_read', 'true').strip().lower() != 'false'
+        if mark_read and sender_type:
             ChatMessage.objects.filter(
                 conversation_id=conversation_id,
                 is_read=False
-            ).update(is_read=True)
-        elif sender_type == 'company':
-            ChatMessage.objects.filter(
-                conversation_id=conversation_id
-            ).exclude(sender_type='company').filter(is_read=False).update(is_read=True)
-        elif sender_type:
-            ChatMessage.objects.filter(
-                conversation_id=conversation_id,
-                sender_type='company',
-                is_read=False
-            ).update(is_read=True)
+            ).exclude(sender_type=sender_type).update(is_read=True)
 
         # Auto-forfeit packed orders where the 6-hour pickup window has expired
         from django.utils import timezone
@@ -576,7 +568,7 @@ def send_message(request):
         try:
             is_bill = 'order bill' in raw_text.lower() or '🧾' in raw_text or '[ref:#' in raw_text
             if is_bill:
-                notify_bill_sent(conversation, raw_text)
+                notify_bill_sent(conversation, raw_text, sender_type=sender_type)
             else:
                 notify_chat_message(
                     conversation=conversation,
@@ -1028,15 +1020,15 @@ def update_fcm_token(request):
                         defaults={'fcm_token': token_str}
                     )
         elif user_type == 'supplier':
-            from ..models import SupplierUser
-            su = SupplierUser.objects.filter(supplieruserid=uid).first()
+            from ..models import Supplieruser
+            su = Supplieruser.objects.filter(supplieruserid=uid).first()
             if su and su.supplierid_id and su.supplierid_id != uid:
                 DeviceFCMToken.objects.update_or_create(
                     user_id=su.supplierid_id,
                     user_type='supplier',
                     defaults={'fcm_token': token_str}
                 )
-            for s_item in SupplierUser.objects.filter(supplierid=uid):
+            for s_item in Supplieruser.objects.filter(supplierid=uid):
                 if s_item.supplieruserid != uid:
                     DeviceFCMToken.objects.update_or_create(
                         user_id=s_item.supplieruserid,
@@ -1707,6 +1699,21 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
                         comp_obj.coins_balance = (comp_obj.coins_balance or 0) + required_coins
                         comp_obj.save(update_fields=["coins_balance"])
                     company_balance = comp_obj.coins_balance or 0
+
+            # Create confirmation message bubble in the conversation
+            try:
+                buyer_sender_type = "enduser" if conv.enduser_id else ("company" if conv.executive_id else "enduser")
+                lock_text = f"🔒 Order Confirmed & Tokens Locked ({required_coins} Tokens)\nPickup guarantee active." if required_coins > 0 else "✅ Order Confirmed\nCustomer confirmed order."
+                ChatMessage.objects.create(
+                    conversation=conv,
+                    sender_type=buyer_sender_type,
+                    text_content=lock_text,
+                    order_status="confirmed",
+                    commitment_coins_locked=required_coins,
+                    is_customer_confirmed=True
+                )
+            except Exception as _bubble_err:
+                print(f"[Chat] Error creating lock bubble: {_bubble_err}")
 
         try:
             from ..fcm_utils import notify_order_locked
