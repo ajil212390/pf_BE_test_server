@@ -2194,6 +2194,7 @@ def get_company_transactions(request, company_id):
 @permission_classes([AllowAny])
 def fcm_debug_logs(request):
     try:
+        import os
         from django.conf import settings
         log_path = os.path.join(settings.BASE_DIR, 'fcm_debug.log')
         if not os.path.exists(log_path):
