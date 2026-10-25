@@ -1010,8 +1010,8 @@ def update_fcm_token(request):
         if len(token_str) < 50:  # FIX #10: reject invalid tokens
             return Response({'error': 'Invalid FCM token format'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Update or add token for current user
-        # Note: Do not delete other accounts on the same device to prevent company tokens from being erased during testing
+        # Ensure this physical device token is disassociated from any prior account on this device
+        DeviceFCMToken.objects.filter(fcm_token=token_str).exclude(user_id=uid, user_type=user_type).delete()
 
         DeviceFCMToken.objects.update_or_create(
             user_id=uid,
@@ -1341,6 +1341,17 @@ def recharge_company_premium_wallet(request, company_id):
             company.premium_tokens_balance = curr + amount
             company.save(update_fields=['premium_tokens_balance'])
             try:
+                from products.models import PremiumTokenTransaction
+                PremiumTokenTransaction.objects.create(
+                    company=company,
+                    amount=amount,
+                    transaction_type='recharge',
+                    company_balance_after=company.premium_tokens_balance,
+                    note=f'B2B Premium Token Recharge (+{amount} Tokens)'
+                )
+            except Exception as _ptx_e:
+                print(f'Error logging company recharge PremiumTokenTransaction: {_ptx_e}')
+            try:
                 from ..fcm_utils import notify_token_credit
                 notify_token_credit(company_id, 'company', amount, 'B2B Premium Token Recharge', company.premium_tokens_balance)
             except Exception:
@@ -1590,6 +1601,18 @@ def recharge_supplier_premium_wallet(request, supplier_id):
             supplier.premium_tokens_balance = curr + amount
             supplier.save(update_fields=['premium_tokens_balance'])
             new_bal = max(new_bal, supplier.premium_tokens_balance)
+            try:
+                from products.models import PremiumTokenTransaction
+                PremiumTokenTransaction.objects.create(
+                    supplier=supplier,
+                    supplier_user_id=target_su_id or supplier_id,
+                    amount=amount,
+                    transaction_type='recharge',
+                    supplier_balance_after=new_bal,
+                    note=f'B2B Premium Token Recharge (+{amount} Tokens)'
+                )
+            except Exception as _ptx_e:
+                print(f'Error logging supplier recharge PremiumTokenTransaction: {_ptx_e}')
         elif not target_su_id:
             return Response({'error': 'Supplier not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -1646,6 +1669,16 @@ def recharge_enduser_wallet(request, enduser_id):
             return Response({"error": "Amount must be positive"}, status=status.HTTP_400_BAD_REQUEST)
         enduser.coins_balance = (enduser.coins_balance or 0) + amount
         enduser.save()
+        try:
+            from products.models import CoinTransaction
+            CoinTransaction.objects.create(
+                end_user=enduser,
+                amount=amount,
+                transaction_type='recharge',
+                note=f'Frontlly Wallet Recharge (+{amount} Tokens)'
+            )
+        except Exception as _ctx_e:
+            print(f'Error logging recharge CoinTransaction: {_ctx_e}')
         try:
             from ..fcm_utils import notify_token_credit
             notify_token_credit(enduser.endsuerid, 'enduser', amount, 'Wallet Recharge', enduser.coins_balance)
@@ -2249,6 +2282,26 @@ def fcm_debug_logs(request):
     except Exception as e:
         return Response({'error': str(e)}, status=500)
 
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def delete_fcm_token(request):
+    try:
+        from ..models import DeviceFCMToken
+        fcm_token = request.data.get('fcm_token')
+        user_id = request.data.get('user_id')
+        user_type = request.data.get('user_type')
+        deleted_count = 0
+        if fcm_token:
+            c, _ = DeviceFCMToken.objects.filter(fcm_token=str(fcm_token).strip()).delete()
+            deleted_count += c
+        elif user_id and user_type:
+            c, _ = DeviceFCMToken.objects.filter(user_id=int(user_id), user_type=user_type).delete()
+            deleted_count += c
+        return Response({'success': True, 'deleted': deleted_count})
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET'])
 @permission_classes([AllowAny])

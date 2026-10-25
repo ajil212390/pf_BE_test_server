@@ -22,7 +22,7 @@ from .views import (
     get_supplier_managers, get_manager_dashboard, delete_supplier_manager,
     delete_supplier_executive,
     get_supplier_products, manage_supplier_products, get_product_suppliers,
-    update_fcm_token,
+    update_fcm_token, delete_fcm_token,
     get_supplier_monitored_conversations, get_manager_monitored_conversations,
     fcm_debug_logs, fcm_active_tokens, fcm_test_dispatch,
 )
@@ -49,6 +49,7 @@ urlpatterns = [
     path('admin/company/<int:company_id>/products/', admin_company_products),
     path('admin/suppliers/', admin_suppliers),
     path('update-fcm-token/', update_fcm_token),
+    path('delete-fcm-token/', delete_fcm_token),
     path('register-enduser/', register_enduser),
     path('enduser/<int:enduser_id>/store-bills-summary/', get_enduser_store_bills_summary),
     path('login-enduser/', login_enduser),
