@@ -2189,3 +2189,36 @@ def get_company_transactions(request, company_id):
         import logging
         logging.getLogger(__name__).error(f'Error fetching company transactions: {e}', exc_info=True)
         return Response({'success': False, 'error': str(e), 'transactions': []}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def fcm_debug_logs(request):
+    try:
+        from django.conf import settings
+        log_path = os.path.join(settings.BASE_DIR, 'fcm_debug.log')
+        if not os.path.exists(log_path):
+            return Response({'status': 'no_logs_yet', 'logs': []})
+        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+            lines = f.readlines()
+        return Response({
+            'total_lines': len(lines),
+            'last_50': [line.strip() for line in lines[-50:]]
+        })
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def fcm_active_tokens(request):
+    try:
+        from ..models import DeviceFCMToken
+        tokens = list(DeviceFCMToken.objects.all().values('id', 'user_id', 'user_type', 'fcm_token', 'updated_at').order_by('-updated_at')[:40])
+        for t in tokens:
+            tok = t.get('fcm_token') or ''
+            t['fcm_token_preview'] = tok[:25] + '...' if len(tok) > 25 else tok
+            del t['fcm_token']
+            t['updated_at'] = str(t['updated_at'])
+        return Response({'count': len(tokens), 'tokens': tokens})
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)

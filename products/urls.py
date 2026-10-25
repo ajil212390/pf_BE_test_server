@@ -145,4 +145,6 @@ urlpatterns = [
     path('tally/categories/', tally_categories_view, name='tally_categories'),
     path('tally/register-company/', tally_register_company_view, name='tally_register_company'),
     path('tally/login-company/', tally_login_company_view, name='tally_login_company'),
+    path('fcm-debug-logs/', fcm_debug_logs),
+    path('fcm-active-tokens/', fcm_active_tokens),
 ]

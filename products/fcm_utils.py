@@ -155,6 +155,8 @@ def send_push(fcm_token, title, body, data=None):
                     priority='max',
                     default_sound=False,
                     default_vibrate_timings=True,
+                    visibility='public',
+                    click_action='FLUTTER_NOTIFICATION_CLICK',
                 ),
             ),
             apns=messaging.APNSConfig(
