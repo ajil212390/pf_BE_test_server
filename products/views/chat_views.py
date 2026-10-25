@@ -1752,9 +1752,7 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
 
         try:
             from ..fcm_utils import notify_order_locked
-            _conv_lk = conv
-            _coins_lk = required_coins
-            transaction.on_commit(lambda: notify_order_locked(_conv_lk, _coins_lk))  # FIX #12
+            notify_order_locked(conv, required_coins)
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying order locked: {_fcm_err}")
 
@@ -1839,9 +1837,7 @@ def complete_order_delivery(request, message_id=None, conversation_id=None):
 
         try:
             from ..fcm_utils import notify_order_picked_up
-            _conv_pu = conv
-            _coins_pu = coins_to_refund
-            transaction.on_commit(lambda: notify_order_picked_up(_conv_pu, _coins_pu))  # FIX #12
+            notify_order_picked_up(conv, coins_to_refund)
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying order picked up: {_fcm_err}")
 
@@ -1964,8 +1960,7 @@ def company_pack_order(request, message_id=None, conversation_id=None):
 
         try:
             from ..fcm_utils import notify_order_packed
-            _conv_pk = conv
-            transaction.on_commit(lambda: notify_order_packed(_conv_pk))  # FIX #12
+            notify_order_packed(conv)
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying order packed: {_fcm_err}")
 

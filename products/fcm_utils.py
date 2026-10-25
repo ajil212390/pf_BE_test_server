@@ -88,6 +88,9 @@ def get_recipient_tokens(user_id, user_type):
             if su and su.supplierid_id:
                 u_ids.append(su.supplierid_id)
 
+        elif u_type in ('enduser', 'customer', 'end_user'):
+            target_types = ['enduser', 'customer', 'end_user', 'user']
+
         tokens = list(DeviceFCMToken.objects.filter(
             user_id__in=list(set(u_ids)),
             user_type__in=target_types,
