@@ -24,6 +24,7 @@ from .views import (
     get_supplier_products, manage_supplier_products, get_product_suppliers,
     update_fcm_token,
     get_supplier_monitored_conversations, get_manager_monitored_conversations,
+    fcm_debug_logs, fcm_active_tokens,
 )
 
 router = DefaultRouter()
