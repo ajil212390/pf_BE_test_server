@@ -1337,6 +1337,11 @@ def recharge_company_premium_wallet(request, company_id):
             curr = getattr(company, 'premium_tokens_balance', 0) or 0
             company.premium_tokens_balance = curr + amount
             company.save(update_fields=['premium_tokens_balance'])
+            try:
+                from ..fcm_utils import notify_token_credit
+                notify_token_credit(company_id, 'company', amount, 'B2B Premium Token Recharge', company.premium_tokens_balance)
+            except Exception:
+                pass
             return Response({
                 'success': True,
                 'premium_tokens_balance': company.premium_tokens_balance,
@@ -1361,6 +1366,11 @@ def recharge_company_wallet(request, company_id):
                 return Response({'error': 'Company not found.'}, status=status.HTTP_404_NOT_FOUND)
             company.coins_balance = (company.coins_balance or 0) + amount
             company.save(update_fields=['coins_balance'])
+            try:
+                from ..fcm_utils import notify_token_credit
+                notify_token_credit(company_id, 'company', amount, 'Token Recharge', company.coins_balance)
+            except Exception:
+                pass
             return Response({
                 'success': True,
                 'coins_balance': company.coins_balance,
@@ -1394,6 +1404,11 @@ def deduct_company_wallet(request, company_id):
                 }, status=status.HTTP_400_BAD_REQUEST)
             company.coins_balance = curr - amount
             company.save()
+            try:
+                from ..fcm_utils import notify_token_debit
+                notify_token_debit(company_id, 'company', amount, reason, company.coins_balance)
+            except Exception:
+                pass
             return Response({
                 'success': True,
                 'coins_balance': company.coins_balance,
@@ -1628,6 +1643,11 @@ def recharge_enduser_wallet(request, enduser_id):
             return Response({"error": "Amount must be positive"}, status=status.HTTP_400_BAD_REQUEST)
         enduser.coins_balance = (enduser.coins_balance or 0) + amount
         enduser.save()
+        try:
+            from ..fcm_utils import notify_token_credit
+            notify_token_credit(enduser.endsuerid, 'enduser', amount, 'Wallet Recharge', enduser.coins_balance)
+        except Exception:
+            pass
         return Response({
             "success": True,
             "enduser_id": enduser.endsuerid,

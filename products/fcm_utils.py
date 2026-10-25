@@ -466,13 +466,16 @@ def notify_bill_sent(conversation, text_content=None, sender_type='company'):
 
 
 # ===========================================================================
-# 5. ORDER LOCKED
+# 5. ORDER LOCKED (Tokens debited/locked for pickup guarantee)
 # ===========================================================================
 def notify_order_locked(conversation, coins_locked):
     try:
         if not conversation or not conversation.company_id:
             return
         buyer_name = conversation.enduser.endusername if conversation.enduser else 'Customer'
+        store_name = conversation.company.companyname if conversation.company else 'Store'
+        
+        # 1. Notify Company (Store Owner) that customer guaranteed pickup
         data = {
             'type': 'order_locked',
             'conversation_id': str(conversation.id),
@@ -487,6 +490,23 @@ def notify_order_locked(conversation, coins_locked):
             f'Order Locked ({coins_locked} Tokens)\nCustomer confirmed pickup guarantee.',
             data,
         )
+
+        # 2. Notify Customer (EndUser) that their tokens were locked as guarantee
+        if conversation.enduser_id and coins_locked and int(coins_locked) > 0:
+            cust_data = {
+                'type': 'order_locked',
+                'conversation_id': str(conversation.id),
+                'company_id': str(conversation.company_id or ''),
+                'enduser_id': str(conversation.enduser_id),
+                'sender_type': 'company', 'sender_name': store_name, 'title_name': store_name,
+                'coins_locked': str(coins_locked),
+            }
+            send_push_to_user(
+                conversation.enduser_id, 'enduser',
+                store_name,
+                f'Order Confirmed ({coins_locked} Tokens Locked)\nPickup guarantee active.',
+                cust_data,
+            )
     except Exception as e:
         _safe_log(f'[FCM] notify_order_locked error: {e}')
 
@@ -517,13 +537,14 @@ def notify_order_packed(conversation):
 
 
 # ===========================================================================
-# 7. ORDER PICKED UP
+# 7. ORDER PICKED UP (Tokens refunded/credited back to Customer)
 # ===========================================================================
 def notify_order_picked_up(conversation, coins_refunded=0):
     try:
         if not conversation or not conversation.enduser_id:
             return
         store_name = conversation.company.companyname if conversation.company else 'Store'
+        buyer_name = conversation.enduser.endusername if conversation.enduser else 'Customer'
         body = (
             f'Order Picked Up Successfully\n{coins_refunded} Tokens refunded to your wallet.'
             if coins_refunded and int(coins_refunded) > 0
@@ -537,6 +558,70 @@ def notify_order_picked_up(conversation, coins_refunded=0):
             'sender_type': 'company', 'sender_name': store_name, 'title_name': store_name,
             'coins_refunded': str(coins_refunded),
         }
+        # 1. Notify Customer of refunded tokens
         send_push_to_user(conversation.enduser_id, 'enduser', store_name, body, data)
+
+        # 2. Notify Company of completed pickup & deposit released
+        if conversation.company_id and coins_refunded and int(coins_refunded) > 0:
+            comp_data = {
+                'type': 'order_picked_up',
+                'conversation_id': str(conversation.id),
+                'company_id': str(conversation.company_id),
+                'enduser_id': str(conversation.enduser_id or ''),
+                'sender_type': 'company', 'sender_name': buyer_name, 'title_name': buyer_name,
+                'coins_refunded': str(coins_refunded),
+            }
+            send_push_to_user(
+                conversation.company_id, 'company',
+                buyer_name,
+                f'Order Picked Up\n{coins_refunded} Tokens refunded to customer.',
+                comp_data,
+            )
     except Exception as e:
         _safe_log(f'[FCM] notify_order_picked_up error: {e}')
+
+
+# ===========================================================================
+# 8. DIRECT TOKEN CREDIT & DEBIT (Wallet Transactions)
+# ===========================================================================
+def notify_token_credit(user_id, user_type, tokens, reason='Tokens credited', balance=None):
+    try:
+        title = 'Tokens Credited'
+        body = (
+            f'+{tokens} Tokens credited to your wallet (Balance: {balance}).'
+            if balance is not None
+            else f'+{tokens} Tokens credited: {reason}.'
+        )
+        data = {
+            'type': 'token_credit',
+            'tokens': str(tokens),
+            'amount': str(tokens),
+            'reason': str(reason),
+            'balance': str(balance or ''),
+            'title_name': title,
+        }
+        send_push_to_user(user_id, user_type, title, body, data)
+    except Exception as e:
+        _safe_log(f'[FCM] notify_token_credit error: {e}')
+
+
+def notify_token_debit(user_id, user_type, tokens, reason='Tokens debited', balance=None):
+    try:
+        title = 'Tokens Debited'
+        body = (
+            f'{tokens} Tokens debited from your wallet (Balance: {balance}).'
+            if balance is not None
+            else f'{tokens} Tokens debited: {reason}.'
+        )
+        data = {
+            'type': 'token_debit',
+            'tokens': str(tokens),
+            'amount': str(tokens),
+            'reason': str(reason),
+            'balance': str(balance or ''),
+            'title_name': title,
+        }
+        send_push_to_user(user_id, user_type, title, body, data)
+    except Exception as e:
+        _safe_log(f'[FCM] notify_token_debit error: {e}')
+
