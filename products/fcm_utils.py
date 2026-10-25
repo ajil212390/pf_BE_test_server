@@ -139,18 +139,32 @@ def send_push(fcm_token, title, body, data=None):
         data_payload['body'] = str(body or '')
 
         message = messaging.Message(
-            # No notification= block (data-only — see FIX #8 above)
+            notification=messaging.Notification(
+                title=str(title or ''),
+                body=str(body or ''),
+            ),
             data=data_payload,
             android=messaging.AndroidConfig(
-                priority='high',  # Wakes device from Doze / battery-kill
+                priority='high',
+                notification=messaging.AndroidNotification(
+                    channel_id='custom_sound_channel_v2',
+                    sound='notification_sound',
+                    priority='max',
+                    default_sound=False,
+                    default_vibrate_timings=True,
+                ),
             ),
             apns=messaging.APNSConfig(
                 headers={
-                    'apns-priority': '10',       # FIX #17: immediate delivery
-                    'apns-push-type': 'alert',   # FIX #17: required for iOS 13+
+                    'apns-priority': '10',
+                    'apns-push-type': 'alert',
                 },
                 payload=messaging.APNSPayload(
                     aps=messaging.Aps(
+                        alert=messaging.ApsAlert(
+                            title=str(title or ''),
+                            body=str(body or ''),
+                        ),
                         sound='notification_sound.mp3',
                         badge=1,
                         content_available=True,
