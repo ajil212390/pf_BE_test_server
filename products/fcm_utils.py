@@ -39,9 +39,16 @@ if FIREBASE_AVAILABLE and not firebase_admin._apps:
             except Exception as _e:
                 print(f'[FCM] Warning initializing Firebase Admin: {_e}')
     if not _initialized:
-        FIREBASE_AVAILABLE = False
-        print('[FCM] ERROR: serviceAccountKey.json not found. FCM is DISABLED. '
-              'Ensure the file exists at products/serviceAccountKey.json on the VPS.')
+        try:
+            from .fcm_credentials import FIREBASE_SERVICE_ACCOUNT
+            cred = credentials.Certificate(FIREBASE_SERVICE_ACCOUNT)
+            firebase_admin.initialize_app(cred)
+            print('[FCM] Firebase Admin successfully initialized with embedded credentials!')
+            _initialized = True
+            FIREBASE_AVAILABLE = True
+        except Exception as _e:
+            FIREBASE_AVAILABLE = False
+            print(f'[FCM] ERROR: serviceAccountKey.json not found and embedded credentials failed: {_e}')
 
 # ---------------------------------------------------------------------------
 # Helpers

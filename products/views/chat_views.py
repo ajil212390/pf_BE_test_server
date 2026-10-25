@@ -1750,6 +1750,8 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
                     commitment_coins_locked=required_coins,
                     is_customer_confirmed=True
                 )
+                conv.updated_at = timezone.now()
+                conv.save(update_fields=["updated_at"])
             except Exception as _bubble_err:
                 print(f"[Chat] Error creating lock bubble: {_bubble_err}")
 
@@ -1837,6 +1839,27 @@ def complete_order_delivery(request, message_id=None, conversation_id=None):
                     )
                 except Exception:
                     pass
+
+        # Create status bubble message for unread badge + chat list bump
+        try:
+            deliv_text = (
+                f"✅ Order Picked Up Successfully\n{coins_to_refund} Tokens refunded to your wallet."
+                if coins_to_refund and int(coins_to_refund) > 0
+                else "✅ Order Picked Up Successfully\nThank you for shopping!"
+            )
+            ChatMessage.objects.create(
+                conversation=conv,
+                sender_type="company",
+                text_content=deliv_text,
+                order_status="delivered",
+                is_picked_up=True,
+                commitment_coins_locked=coins_to_refund,
+                is_read=False,
+            )
+            conv.updated_at = timezone.now()
+            conv.save(update_fields=["updated_at"])
+        except Exception as _deliv_msg_err:
+            print(f"[Chat] Error creating delivery bubble: {_deliv_msg_err}")
 
         try:
             from ..fcm_utils import notify_order_picked_up
@@ -1960,6 +1983,21 @@ def company_pack_order(request, message_id=None, conversation_id=None):
         else:
             msg.expires_at = None
         msg.save(update_fields=["order_status", "is_pack_confirmed", "pack_confirmed_at", "expires_at"])
+
+        # Create status bubble message for unread badge + chat list bump
+        try:
+            ChatMessage.objects.create(
+                conversation=conv,
+                sender_type="company",
+                text_content="📦 Order Packed & Ready for Pickup\nPlease collect within 6 hours.",
+                order_status="packed",
+                is_pack_confirmed=True,
+                is_read=False,
+            )
+            conv.updated_at = timezone.now()
+            conv.save(update_fields=["updated_at"])
+        except Exception as _pack_msg_err:
+            print(f"[Chat] Error creating pack bubble: {_pack_msg_err}")
 
         try:
             from ..fcm_utils import notify_order_packed
