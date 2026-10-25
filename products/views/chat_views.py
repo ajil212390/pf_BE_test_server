@@ -564,19 +564,25 @@ def send_message(request):
             msg.commitment_coins_locked = 0
             msg.save(update_fields=['order_status', 'is_customer_confirmed', 'commitment_coins_locked'])
 
-        # Trigger Push Notification
+        # Trigger Push Notification — FIX #12: fire after DB commit
         try:
             is_bill = 'order bill' in raw_text.lower() or '🧾' in raw_text or '[ref:#' in raw_text
+            _conv_msg = conversation
+            _sender_msg = sender_type
+            _text_msg = text_content
+            _audio_msg = bool(audio_file)
+            _image_msg = bool(image_file)
+            _raw_msg = raw_text
             if is_bill:
-                notify_bill_sent(conversation, raw_text, sender_type=sender_type)
+                transaction.on_commit(lambda: notify_bill_sent(_conv_msg, _raw_msg, sender_type=_sender_msg))
             else:
-                notify_chat_message(
-                    conversation=conversation,
-                    sender_type=sender_type,
-                    text_content=text_content,
-                    has_audio=bool(audio_file),
-                    has_image=bool(image_file)
-                )
+                transaction.on_commit(lambda: notify_chat_message(
+                    conversation=_conv_msg,
+                    sender_type=_sender_msg,
+                    text_content=_text_msg,
+                    has_audio=_audio_msg,
+                    has_image=_image_msg,
+                ))
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying in send_message: {_fcm_err}")
 
@@ -808,10 +814,12 @@ def send_order_message(request):
         conversation.updated_at = msg.timestamp
         conversation.save()
 
-        # Trigger Push Notification
+        # Trigger Push Notification — FIX #12: after DB commit
         try:
             summary = ", ".join([f"{it.get('qty', 1)}x {it.get('name')}" for it in cart_items])
-            notify_new_order(conversation, summary)
+            _conv_no = conversation
+            _summ_no = summary
+            transaction.on_commit(lambda: notify_new_order(_conv_no, _summ_no))
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying on order: {_fcm_err}")
 
@@ -880,7 +888,9 @@ def update_order_status(request, message_id):
 
         # Trigger Push Notification
         try:
-            notify_order_status(msg.conversation, status_val)
+            _msg_conv = msg.conversation
+            _status_v = status_val
+            transaction.on_commit(lambda: notify_order_status(_msg_conv, _status_v))  # FIX #12
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying on order status: {_fcm_err}")
         return Response({'success': True, 'message': f'Order status updated to {status_val}'})
@@ -994,6 +1004,8 @@ def update_fcm_token(request):
 
         uid = int(user_id)
         token_str = str(fcm_token).strip()
+        if len(token_str) < 50:  # FIX #10: reject invalid tokens
+            return Response({'error': 'Invalid FCM token format'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Update or add token for current user
         # Note: Do not delete other accounts on the same device to prevent company tokens from being erased during testing
@@ -1236,10 +1248,13 @@ def update_supplier_order_status(request, order_id):
         chat_status = 'accepted' if status_val.lower() in ['approved', 'accepted'] else ('declined' if status_val.lower() == 'declined' else status_val.lower())
         ChatMessage.objects.filter(text_content__contains=f'[ref:#{order_id}]').update(order_status=chat_status)
 
+        # FIX #12: fire after DB commit
         try:
             conv = Conversation.objects.filter(company=order.company, executive=order.executive).first()
             if conv:
-                notify_order_status(conv, chat_status)
+                _conv_os2 = conv
+                _status_os2 = chat_status
+                transaction.on_commit(lambda: notify_order_status(_conv_os2, _status_os2))
         except Exception as _nerr:
             pass
 
@@ -1717,7 +1732,9 @@ def confirm_order_bill(request, message_id=None, conversation_id=None):
 
         try:
             from ..fcm_utils import notify_order_locked
-            notify_order_locked(conv, required_coins)
+            _conv_lk = conv
+            _coins_lk = required_coins
+            transaction.on_commit(lambda: notify_order_locked(_conv_lk, _coins_lk))  # FIX #12
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying order locked: {_fcm_err}")
 
@@ -1802,7 +1819,9 @@ def complete_order_delivery(request, message_id=None, conversation_id=None):
 
         try:
             from ..fcm_utils import notify_order_picked_up
-            notify_order_picked_up(conv, coins_to_refund)
+            _conv_pu = conv
+            _coins_pu = coins_to_refund
+            transaction.on_commit(lambda: notify_order_picked_up(_conv_pu, _coins_pu))  # FIX #12
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying order picked up: {_fcm_err}")
 
@@ -1925,7 +1944,8 @@ def company_pack_order(request, message_id=None, conversation_id=None):
 
         try:
             from ..fcm_utils import notify_order_packed
-            notify_order_packed(conv)
+            _conv_pk = conv
+            transaction.on_commit(lambda: notify_order_packed(_conv_pk))  # FIX #12
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying order packed: {_fcm_err}")
 

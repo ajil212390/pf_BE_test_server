@@ -5,7 +5,7 @@ from datetime import timedelta
 from django.db import transaction, connection
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from ..fcm_utils import send_push_to_user, _safe_log
@@ -66,19 +66,21 @@ def request_extension_otp_view(request):
     now = timezone.now()
     expires_at = now + timedelta(minutes=5)
 
-    with connection.cursor() as cursor:
-        cursor.execute(
-            'UPDATE due_date_extension_otp SET is_used = 1 WHERE company_id = %s AND bill_id = %s AND is_used = 0',
-            [effective_company_id, effective_bill_id]
-        )
-        cursor.execute(
-            '''
-            INSERT INTO due_date_extension_otp 
-            (company_id, supplier_id, bill_id, bill_no, otp_code, new_due_date, extension_days, token_cost, created_at, expires_at, is_used)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)
-            ''',
-            [effective_company_id, effective_supplier_id, effective_bill_id, effective_bill_no, otp_code, new_due_date_str, extension_days, final_token_cost, now, expires_at]
-        )
+    # FIX #5: atomic — FCM fires only after DB commit
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'UPDATE due_date_extension_otp SET is_used = 1 WHERE company_id = %s AND bill_id = %s AND is_used = 0',
+                [effective_company_id, effective_bill_id]
+            )
+            cursor.execute(
+                '''
+                INSERT INTO due_date_extension_otp
+                (company_id, supplier_id, bill_id, bill_no, otp_code, new_due_date, extension_days, token_cost, created_at, expires_at, is_used)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)
+                ''',
+                [effective_company_id, effective_supplier_id, effective_bill_id, effective_bill_no, otp_code, new_due_date_str, extension_days, final_token_cost, now, expires_at]
+            )
 
     _safe_log(f'[Extension OTP] Generated OTP {otp_code} for Bill #{effective_bill_no} (Company: {effective_company_id}, Fee: {final_token_cost} tokens, Rate: {fee_rate_percent}%, Count: {existing_commitments_count})')
 
@@ -97,24 +99,15 @@ def request_extension_otp_view(request):
         'expires_in': '300',
     }
 
+    # FIX #16: Send OTP only to company owner tokens (not all sub-users)
     try:
-        target_ids = {effective_company_id}
-        if company_id:
-            target_ids.add(company_id)
-        for u_id in Users.objects.filter(companyid=effective_company_id).values_list('userid', flat=True):
-            target_ids.add(u_id)
-        if company_id:
-            for u_id in Users.objects.filter(companyid=company_id).values_list('userid', flat=True):
-                target_ids.add(u_id)
-
-        for tid in target_ids:
-            send_push_to_user(
-                user_id=tid,
-                user_type='company',
-                title=notif_title,
-                body=notif_body,
-                data=notif_data
-            )
+        send_push_to_user(
+            user_id=effective_company_id,
+            user_type='company',
+            title=notif_title,
+            body=notif_body,
+            data=notif_data,
+        )
     except Exception as e:
         _safe_log(f'[FCM Extension OTP Error] {e}')
 
@@ -311,7 +304,7 @@ def verify_and_extend_view(request):
             user_id=effective_company_id,
             user_type='company',
             title='Due Date Extended',
-            body=f'Bill #{effective_bill_no} extended to {new_due_date_str}. {recorded_cost} tokens transferred to supplier. Balance: {updated_company_balance}',
+            body=f'Bill #{effective_bill_no} extended to {new_due_date_str}. {recorded_cost} tokens transferred.',
             data={
                 'type': 'due_extension_success',
                 'bill_id': str(effective_bill_id),
@@ -320,6 +313,8 @@ def verify_and_extend_view(request):
                 'token_cost': str(recorded_cost),
                 'company_tokens': str(updated_company_balance),
                 'supplier_tokens': str(updated_supplier_balance),
+                # Fix B: include supplier_id so tap can route to ledger/supplier screen
+                'supplier_id': str(effective_supplier_id),
             }
         )
     except Exception as e:
@@ -345,6 +340,8 @@ def verify_and_extend_view(request):
                 'extension_days': str(extension_days),
                 'token_cost': str(recorded_cost),
                 'company_name': str(comp_name),
+                'company_id': str(effective_company_id),  # Fix B: for tap routing
+                'supplier_id': str(effective_supplier_id),
                 'supplier_tokens': str(updated_supplier_balance),
             }
         )
@@ -365,7 +362,7 @@ def verify_and_extend_view(request):
 
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
+@permission_classes([IsAuthenticated])  # FIX #20: require login to poll OTP
 def get_pending_extension_otp_view(request):
     """
     Returns active, unexpired, unused due date extension OTP for a given company.
