@@ -24,7 +24,7 @@ from .views import (
     get_supplier_products, manage_supplier_products, get_product_suppliers,
     update_fcm_token,
     get_supplier_monitored_conversations, get_manager_monitored_conversations,
-    fcm_debug_logs, fcm_active_tokens,
+    fcm_debug_logs, fcm_active_tokens, fcm_test_dispatch,
 )
 
 router = DefaultRouter()
@@ -148,4 +148,5 @@ urlpatterns = [
     path('tally/login-company/', tally_login_company_view, name='tally_login_company'),
     path('fcm-debug-logs/', fcm_debug_logs),
     path('fcm-active-tokens/', fcm_active_tokens),
+    path('fcm-test-dispatch/', fcm_test_dispatch),
 ]

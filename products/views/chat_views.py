@@ -1,3 +1,6 @@
+import os
+import time
+import sys
 from django.db import transaction
 from django.db.models import Q
 from rest_framework import status
@@ -574,15 +577,15 @@ def send_message(request):
             _image_msg = bool(image_file)
             _raw_msg = raw_text
             if is_bill:
-                transaction.on_commit(lambda: notify_bill_sent(_conv_msg, _raw_msg, sender_type=_sender_msg))
+                notify_bill_sent(_conv_msg, _raw_msg, sender_type=_sender_msg)
             else:
-                transaction.on_commit(lambda: notify_chat_message(
+                notify_chat_message(
                     conversation=_conv_msg,
                     sender_type=_sender_msg,
                     text_content=_text_msg,
                     has_audio=_audio_msg,
                     has_image=_image_msg,
-                ))
+                )
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying in send_message: {_fcm_err}")
 
@@ -819,7 +822,7 @@ def send_order_message(request):
             summary = ", ".join([f"{it.get('qty', 1)}x {it.get('name')}" for it in cart_items])
             _conv_no = conversation
             _summ_no = summary
-            transaction.on_commit(lambda: notify_new_order(_conv_no, _summ_no))
+            notify_new_order(_conv_no, _summ_no)
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying on order: {_fcm_err}")
 
@@ -890,7 +893,7 @@ def update_order_status(request, message_id):
         try:
             _msg_conv = msg.conversation
             _status_v = status_val
-            transaction.on_commit(lambda: notify_order_status(_msg_conv, _status_v))  # FIX #12
+            notify_order_status(_msg_conv, _status_v)  # FIX #12
         except Exception as _fcm_err:
             print(f"[FCM] Error notifying on order status: {_fcm_err}")
         return Response({'success': True, 'message': f'Order status updated to {status_val}'})
@@ -1254,7 +1257,7 @@ def update_supplier_order_status(request, order_id):
             if conv:
                 _conv_os2 = conv
                 _status_os2 = chat_status
-                transaction.on_commit(lambda: notify_order_status(_conv_os2, _status_os2))
+                notify_order_status(_conv_os2, _status_os2)
         except Exception as _nerr:
             pass
 
@@ -2223,3 +2226,55 @@ def fcm_active_tokens(request):
         return Response({'count': len(tokens), 'tokens': tokens})
     except Exception as e:
         return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET', 'POST'])
+@authentication_classes([])
+@permission_classes([])
+def fcm_test_dispatch(request):
+    """Directly triggers an FCM push to a given user/role and returns full diagnostics."""
+    try:
+        user_id = request.GET.get('user_id') or request.data.get('user_id') or '1'
+        user_type = request.GET.get('user_type') or request.data.get('user_type') or 'enduser'
+        title = request.GET.get('title') or request.data.get('title') or 'Lockscreen Test Alert'
+        body = request.GET.get('body') or request.data.get('body') or 'This should wake your phone and ring custom sound!'
+        
+        from ..fcm_utils import get_recipient_tokens, send_push
+        tokens = get_recipient_tokens(user_id, user_type)
+        if not tokens:
+            return Response({
+                'status': 'no_tokens',
+                'user_id': user_id,
+                'user_type': user_type,
+                'message': f'No valid FCM tokens found in DB for {user_type} #{user_id}'
+            })
+        
+        results = []
+        for tok in tokens:
+            t0 = time.time()
+            data_payload = {
+                'type': 'test_push',
+                'conversation_id': '1',
+                'title': title,
+                'body': body,
+            }
+            res = send_push(tok, title, body, data=data_payload)
+            elapsed = int((time.time() - t0) * 1000)
+            results.append({
+                'token_preview': tok[:25] + '...',
+                'full_token': tok,
+                'firebase_result': str(res),
+                'latency_ms': elapsed,
+                'success': bool(res)
+            })
+            
+        return Response({
+            'status': 'dispatched',
+            'user_id': user_id,
+            'user_type': user_type,
+            'count': len(tokens),
+            'results': results
+        })
+    except Exception as e:
+        import traceback
+        return Response({'status': 'error', 'error': str(e), 'traceback': traceback.format_exc()}, status=500)
